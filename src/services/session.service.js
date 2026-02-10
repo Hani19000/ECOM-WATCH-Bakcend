@@ -1,9 +1,9 @@
 /**
  * @module Service/Session
- *
- * Gère la persistance des sessions (refresh tokens en base) et les options de cookie.
+ * Gère la persistance des sessions avec une stratégie de cache hybride (Redis + DB).
  */
 import { refreshTokensRepo } from '../repositories/index.js';
+import { cacheService } from './cache.service.js'; // Ton nouveau service
 import { ENV } from '../config/environment.js';
 
 class SessionService {
@@ -21,7 +21,7 @@ class SessionService {
     constructor() {
         if (SessionService.instance) return SessionService.instance;
 
-        if (ENV.nodeEnv === 'development') {
+        if (ENV.server.nodeEnv === 'development') {
             this.#cookieOptions.sameSite = 'Lax';
             this.#cookieOptions.secure = false;
         }
@@ -35,22 +35,53 @@ class SessionService {
 
         const expiresAt = new Date(Date.now() + this.#cookieOptions.maxAge);
 
+        // 1. Persistance en Base de Données (Source de vérité)
         await refreshTokensRepo.create({ userId, token: refreshToken, expiresAt });
+
+        // 2. Mise en cache pour accès rapide (TTL synchronisé avec le cookie)
+        // On stocke l'ID utilisateur pour éviter une requête DB au refresh
+        await cacheService.set(
+            `session:${refreshToken}`,
+            { userId, expiresAt },
+            Math.floor(this.#cookieOptions.maxAge / 1000)
+        );
     }
 
     async validateSession(refreshToken) {
         if (!refreshToken) return null;
-        return await refreshTokensRepo.findByToken(refreshToken);
+
+        // --- ÉTAPE 1 : Tentative via Redis (Ultra rapide) ---
+        try {
+            const cachedSession = await cacheService.get(`session:${refreshToken}`);
+            if (cachedSession) return cachedSession;
+        } catch (err) {
+            // Si Redis échoue, on loggue mais on ne bloque pas l'utilisateur
+            console.error('CacheService Error (Validate):', err);
+        }
+
+        // --- ÉTAPE 2 : Fallback via PostgreSQL ---
+        const session = await refreshTokensRepo.findByToken(refreshToken);
+
+        // --- ÉTAPE 3 : Remplissage du cache (Self-healing) ---
+        if (session) {
+            await cacheService.set(
+                `session:${refreshToken}`,
+                { userId: session.userId, expiresAt: session.expiresAt },
+                3600 // On remet pour 1h par exemple
+            );
+        }
+
+        return session;
     }
 
     async deleteSession(refreshToken) {
-        if (refreshToken) {
-            await refreshTokensRepo.revokeById(refreshToken);
-        }
-    }
+        if (!refreshToken) return;
 
-    async cleanExpiredSessions() {
-        return await refreshTokensRepo.deleteExpired();
+        // On supprime des deux côtés en parallèle
+        await Promise.all([
+            refreshTokensRepo.revokeById(refreshToken),
+            cacheService.delete(`session:${refreshToken}`)
+        ]);
     }
 }
 

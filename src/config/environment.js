@@ -21,7 +21,9 @@ const requiredEnv = [
     // 'MAIL_HOST',
     // 'MAIL_PORT',
     // 'MAIL_USER',
-    // 'MAIL_PASS'
+    // 'MAIL_PASS',
+    'REDIS_HOST',
+    'REDIS_PORT'
 ];
 
 const missingEnv = requiredEnv.filter((key) => !process.env[key]);
@@ -44,6 +46,11 @@ export const ENV = Object.freeze({
             password: process.env.POSTGRES_PASSWORD,
             database: process.env.POSTGRES_DB,
         },
+        redis: {
+            host: process.env.REDIS_HOST || 'redis',
+            port: Number(process.env.REDIS_PORT) || 6379,
+            password: process.env.REDIS_PASSWORD || undefined,
+        }
     },
     jwt: {
         accessTokenSecret: process.env.JWT_ACCESS_SECRET,

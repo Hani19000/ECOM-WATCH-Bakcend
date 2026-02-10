@@ -14,10 +14,16 @@ import {
     generalLimiter,
     compressResponse,
 } from './config/security.js';
+import { healthService } from './services/health.service.js';
+
 
 const app = express();
 
+app.get('/health', async (_req, res) => {
+    const { isHealthy, status } = await healthService.check();
 
+    res.status(isHealthy ? 200 : 503).json(status);
+});
 // --- 1. MIDDLEWARES DE BASE ---
 app.use(express.json({
     verify: (req, _res, buf) => {
