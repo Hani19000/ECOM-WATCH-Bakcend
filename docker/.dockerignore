@@ -1,0 +1,28 @@
+# Dépendances
+node_modules
+npm-debug.log
+
+# Environnement et Secrets
+.env
+.env.local
+.env.development
+.env.production
+
+# Git
+.git
+.gitignore
+
+# Docker
+docker-compose.yml
+Dockerfile
+.dockerignore
+
+# Documentation et Logs
+README.md
+logs
+*.log
+
+# Dossiers système / IDE
+.vscode
+.idea
+.DS_Store
