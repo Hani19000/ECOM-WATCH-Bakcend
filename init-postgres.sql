@@ -85,6 +85,7 @@ CREATE TABLE inventory (
     updated_at TIMESTAMP DEFAULT NOW()
 );
 
+ALTER TABLE inventory ADD CONSTRAINT positive_stock CHECK (available_stock >= 0);
 -- ===============================
 -- CATEGORIES
 -- ===============================
@@ -303,3 +304,15 @@ FROM products p
 JOIN product_variants pv ON p.id = pv.product_id
 JOIN inventory i ON pv.id = i.variant_id
 ORDER BY p.name ASC, pv.sku ASC;
+
+
+SELECT p.*, 
+       MIN(v.price) as starting_price,
+       COUNT(v.id) as variant_count
+FROM products p
+LEFT JOIN product_variants v ON p.id = v.product_id
+${joinClause}
+${whereClause}
+GROUP BY p.id
+ORDER BY p.created_at DESC
+LIMIT $1 OFFSET $2

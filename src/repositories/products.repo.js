@@ -98,12 +98,25 @@ export const productsRepo = {
     );
     const total = parseInt(countRows[0].count);
 
+    // Dans productsRepo.list
     const { rows } = await client.query(
-      `SELECT DISTINCT p.* FROM products p
-         ${joinClause}
-         ${whereClause}
-         ORDER BY p.created_at DESC
-         LIMIT $${queryIndex++} OFFSET $${queryIndex++}`,
+      `SELECT 
+      p.*, 
+      MIN(v.price) as starting_price,
+      COUNT(v.id) as variant_count,
+      -- On récupère un aperçu léger des variantes pour le catalogue
+      COALESCE(
+        json_agg(
+          json_build_object('id', v.id, 'attributes', v.attributes)
+        ) FILTER (WHERE v.id IS NOT NULL), '[]'
+      ) as variants_preview
+   FROM products p
+   LEFT JOIN product_variants v ON p.id = v.product_id
+   ${joinClause}
+   ${whereClause}
+   GROUP BY p.id
+   ORDER BY p.created_at DESC
+   LIMIT $${queryIndex++} OFFSET $${queryIndex++}`,
       [...params, limit, offset]
     );
 
