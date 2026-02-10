@@ -77,9 +77,13 @@ class SessionService {
     async deleteSession(refreshToken) {
         if (!refreshToken) return;
 
-        // On supprime des deux côtés en parallèle
+        // Trouver la session pour avoir l'ID numérique (correction bug audit)
+        const session = await refreshTokensRepo.findByToken(refreshToken);
+
         await Promise.all([
-            refreshTokensRepo.revokeById(refreshToken),
+            // Supprimer en DB par ID si la session existe
+            session ? refreshTokensRepo.revokeById(session.id) : Promise.resolve(),
+            // Supprimer du cache Redis
             cacheService.delete(`session:${refreshToken}`)
         ]);
     }

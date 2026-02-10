@@ -41,24 +41,18 @@ class UserService {
     }
 
     /**
-     * Remplace l'ensemble des rôles d'un utilisateur : les anciens rôles sont d'abord
-     * retirés pour éviter les conflits, puis le nouveau rôle est attribué.
+     * Met à jour les informations du profil utilisateur (Prénom, Nom, Téléphone).
+     * Vérifie l'existence de l'utilisateur avant de renvoyer le résultat.
      */
-    async updateUser(userId, roleName) {
-        const role = await rolesRepo.findByName(roleName.toUpperCase());
-        if (!role) throw new AppError(`Le rôle ${roleName} n'existe pas`, HTTP_STATUS.NOT_FOUND);
+    async updateProfile(userId, { firstName, lastName, phone }) {
+        // Appel au repository avec les bons champs
+        const user = await usersRepo.updateProfile(userId, { firstName, lastName, phone });
 
-        const user = await usersRepo.findById(userId);
-        if (!user) throw new AppError('Utilisateur introuvable', HTTP_STATUS.NOT_FOUND);
-
-        const currentRoles = await rolesRepo.listUserRoles(userId);
-        for (const r of currentRoles) {
-            await rolesRepo.removeUserRole(userId, r.id);
+        if (!user) {
+            throw new AppError("Utilisateur introuvable", HTTP_STATUS.NOT_FOUND);
         }
 
-        await rolesRepo.addUserRole(userId, role.id);
-
-        return { userId, updatedRole: role.name };
+        return user;
     }
 
     /**
@@ -73,10 +67,6 @@ class UserService {
         delete user.salt;
 
         return user;
-    }
-
-    async updateProfile(userId, updateData) {
-        return await usersRepo.updateProfile(userId, updateData);
     }
 
     async changePassword(userId, { oldPassword, newPassword }) {

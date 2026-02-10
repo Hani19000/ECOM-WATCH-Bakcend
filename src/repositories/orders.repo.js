@@ -88,6 +88,18 @@ export const ordersRepo = {
     return mapRows(rows);
   },
 
+  /**
+   * Récupère la liste des articles liés à une commande.
+   * Essentiel pour gérer les annulations et remises en stock.
+   */
+  async listItems(orderId) {
+    const { rows } = await pgPool.query(
+      `SELECT * FROM order_items WHERE order_id = $1`,
+      [orderId]
+    );
+    return mapRows(rows);
+  },
+
   async setStatus(id, status) {
     const { rows } = await pgPool.query(
       `UPDATE orders SET status = $2, updated_at = NOW() WHERE id = $1 RETURNING *`,
@@ -118,7 +130,7 @@ export const ordersRepo = {
       if (paymentData) {
         await client.query(
           `INSERT INTO payments (order_id, provider, payment_intent_id, status, amount)
-                     VALUES ($1, $2, $3, $4, $5)`,
+                      VALUES ($1, $2, $3, $4, $5)`,
           [orderId, paymentData.provider, paymentData.paymentIntentId, 'SUCCESS', paymentData.amount]
         );
       }
@@ -193,4 +205,18 @@ export const ordersRepo = {
       total: parseInt(countRows[0].count),
     };
   },
+
+  /**
+   * Calcule les statistiques globales pour le tableau de bord Admin.
+   */
+  async getGlobalStats() {
+    const { rows } = await pgPool.query(`
+        SELECT 
+            COUNT(*) as total_orders,
+            SUM(total_amount) as total_revenue,
+            COUNT(CASE WHEN status = 'PENDING' THEN 1 END) as pending_orders
+        FROM orders
+    `);
+    return rows[0];
+  }
 };

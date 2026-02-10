@@ -3,6 +3,7 @@ import { productController } from '../controllers/product.controller.js';
 import { protect } from '../middlewares/auth.middleware.js';
 import { restrictTo } from '../middlewares/role.middleware.js';
 import { validateUUID, validateRequired } from '../utils/validation.js';
+import { ValidationError } from '../utils/appError.js'; // Correction : Import ajouté
 
 const router = Router();
 

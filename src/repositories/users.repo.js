@@ -135,4 +135,13 @@ export const usersRepo = {
 
     return rows.length > 0;
   },
+
+  /**
+   * Compte le nombre total d'utilisateurs.
+   * Nécessaire pour le tableau de bord administrateur.
+   */
+  async count() {
+    const { rows } = await pgPool.query("SELECT COUNT(*) FROM users");
+    return parseInt(rows[0].count);
+  }
 };

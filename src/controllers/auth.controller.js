@@ -12,8 +12,9 @@ import { ENV } from '../config/environment.js';
 /**
  * Options partagées du cookie refreshToken.
  * Centralisé ici pour garantir une configuration identique entre register et login, et faciliter les futures modifications.
+ * Correction: Utilisation de la bonne variable d'environnement pour la production.
  */
-const isProduction = ENV.IS_PRODUCTION;
+const isProduction = ENV.server.isProduction;
 
 const REFRESH_TOKEN_COOKIE_OPTIONS = {
     httpOnly: true,
