@@ -35,10 +35,10 @@ const getClientIp = (req) => {
  */
 const getAllowedOrigins = () => {
     if (ENV.server.nodeEnv === 'production') {
-        return ['https://ecom-watch-frontend.vercel.app'];
+        return ['https://ecomwatch.vercel.app'];
     }
     return [
-        'https://ecom-watch-frontend.vercel.app',
+        'https://ecomwatch.vercel.app',
         'http://localhost:5173',
         'http://localhost:5174',
         'http://localhost:3000',
@@ -64,7 +64,7 @@ export const helmetMiddleware = helmet({
             imgSrc: ["'self'", 'data:', 'blob:', 'https://res.cloudinary.com'],
             connectSrc: [
                 "'self'",
-                'https://ecom-watch-frontend.vercel.app',
+                'https://ecomwatch.vercel.app/',
                 'https://o4510681965199360.ingest.de.sentry.io',
             ],
             fontSrc: ["'self'", 'data:'],
