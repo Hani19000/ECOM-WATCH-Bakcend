@@ -63,6 +63,7 @@ export const helmetMiddleware = helmet({
             imgSrc: ["'self'", 'data:', 'blob:', 'https://res.cloudinary.com'],
             connectSrc: [
                 "'self'",
+                'https://ecom-watch-frontend.vercel.app',
                 'https://votre-app-h1watch.onrender.com',
                 'https://o4510681965199360.ingest.de.sentry.io',
             ],
