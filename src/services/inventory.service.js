@@ -60,7 +60,23 @@ class InventoryService {
     }
 
     async #invalidateCache(variantId) {
-        await cacheService.delete(`${this.#CACHE_PREFIX}${variantId}`).catch(() => { });
+        try {
+            await cacheService.delete(`${this.#CACHE_PREFIX}${variantId}`);
+
+            const variant = await productsRepo.findVariantById(variantId);
+            if (variant && variant.productId) {
+                const product = await productsRepo.findById(variant.productId);
+                if (product) {
+                    await cacheService.deleteMany([
+                        `product:details:${product.id}`,
+                        `product:details:${product.slug}`,
+                        'catalog:list:*'
+                    ]);
+                }
+            }
+        } catch (error) {
+            logError(error, { context: 'InventoryService invalidateCache', variantId });
+        }
     }
 
     async adjustStock(variantId, quantity, reason = 'ADJUSTMENT') {
@@ -70,11 +86,14 @@ class InventoryService {
         const newTotal = currentStock.availableStock + quantity;
         if (newTotal < 0) throw new BusinessError('Le stock total ne peut pas être négatif');
 
-        return await inventoryRepo.upsert({
+        const result = await inventoryRepo.upsert({
             variantId,
             availableStock: newTotal,
             reservedStock: currentStock.reservedStock,
         });
+
+        await this.#invalidateCache(variantId);
+        return result;
     }
 
     /**
@@ -156,6 +175,7 @@ class InventoryService {
             throw new AppError("Variante introuvable dans l'inventaire", HTTP_STATUS.NOT_FOUND);
         }
 
+        await this.#invalidateCache(variantId);
         return updatedStock;
     }
 }
