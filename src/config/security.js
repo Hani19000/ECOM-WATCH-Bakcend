@@ -21,7 +21,6 @@ import { NotFoundError } from '../utils/appError.js';
  * @returns {string} L'adresse IP normalisée ou 'unknown'
  */
 const getClientIp = (req) => {
-    // x-forwarded-for contient la chaîne des IPs : "client, proxy1, proxy2"
     const forwardedFor = req.headers['x-forwarded-for'];
     if (forwardedFor) {
         return forwardedFor.split(',')[0].trim();
@@ -30,8 +29,7 @@ const getClientIp = (req) => {
 };
 
 /**
- * Définit les origines autorisées (CORS).
- * Sépare la logique de production et de développement.
+ * Définit les origines autorisées (CORS) de base.
  */
 const getAllowedOrigins = () => {
     if (ENV.server.nodeEnv === 'production') {
@@ -40,14 +38,27 @@ const getAllowedOrigins = () => {
             /\.vercel\.app$/
         ];
     }
+    return [];
 };
 
-const origins = process.env.CORS_ORIGINS?.split(',') || getAllowedOrigins();
+// Fusion intelligente des origines .env et des origines par défaut
+const getOrigins = () => {
+    const envOrigins = process.env.CORS_ORIGINS?.split(',').map(o => o.trim()) || [];
+    const defaultOrigins = getAllowedOrigins();
+
+    const combined = [...envOrigins, ...defaultOrigins];
+
+    const uniqueStrings = [...new Set(combined.filter(o => typeof o === 'string'))];
+    const regexes = combined.filter(o => o instanceof RegExp);
+
+    return [...uniqueStrings, ...regexes];
+};
+
+const origins = getOrigins();
 
 // ================================================================
 // MIDDLEWARES DE SÉCURITÉ (GLOBAL)
 // ================================================================
-
 /**
  * Configuration Helmet : En-têtes de sécurité HTTP.
  * Définit la Content Security Policy (CSP) pour bloquer les scripts malveillants.
@@ -57,7 +68,7 @@ export const helmetMiddleware = helmet({
         directives: {
             defaultSrc: ["'self'"],
             scriptSrc: ["'self'"],
-            styleSrc: ["'self'", "'unsafe-inline'"], // unsafe-inline nécessaire pour certains styles dynamiques
+            styleSrc: ["'self'", "'unsafe-inline'"],
             imgSrc: ["'self'", 'data:', 'blob:', 'https://res.cloudinary.com'],
             connectSrc: [
                 "'self'",
