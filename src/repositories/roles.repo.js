@@ -8,9 +8,21 @@ import { mapRow, mapRows } from './_mappers.js';
 import { validateUUID } from '../utils/validation.js';
 
 export const rolesRepo = {
+  /**
+   * Liste tous les rôles disponibles.
+   * Alias de findAll() pour les services qui utilisent la convention "list".
+   */
   async list() {
     const { rows } = await pgPool.query(`SELECT * FROM roles ORDER BY id ASC`);
     return mapRows(rows);
+  },
+
+  /**
+   * Liste tous les rôles disponibles.
+   * Appelé par roles.service.js → getAllRoles().
+   */
+  async findAll() {
+    return this.list();
   },
 
   async findByName(name) {
@@ -18,8 +30,58 @@ export const rolesRepo = {
       `SELECT * FROM roles WHERE name = $1`,
       [name]
     );
-
     return mapRow(rows[0]);
+  },
+
+  /**
+   * Récupère un rôle par son identifiant.
+   * Appelé par roles.service.js → deleteRole() pour vérifier l'existence avant suppression.
+   */
+  async findById(id) {
+    const { rows } = await pgPool.query(
+      `SELECT * FROM roles WHERE id = $1`,
+      [id]
+    );
+    return mapRow(rows[0]);
+  },
+
+  /**
+   * Crée un rôle personnalisé.
+   * Appelé par roles.service.js → createCustomRole().
+   */
+  async create({ name, description = null }) {
+    const { rows } = await pgPool.query(
+      `INSERT INTO roles (name, description)
+             VALUES ($1, $2)
+             RETURNING *`,
+      [name, description]
+    );
+    return mapRow(rows[0]);
+  },
+
+  /**
+   * Supprime un rôle par son identifiant.
+   * Appelé par roles.service.js → deleteRole() après vérification que ce n'est pas un rôle système.
+   */
+  async delete(id) {
+    const { rowCount } = await pgPool.query(
+      `DELETE FROM roles WHERE id = $1`,
+      [id]
+    );
+    return rowCount > 0;
+  },
+
+  /**
+   * Compte le nombre d'utilisateurs ayant un rôle donné.
+   * Appelé par roles.service.js → removeRoleFromUser() pour garantir
+   * qu'au moins un administrateur reste toujours en place.
+   */
+  async countUsersByRole(roleId) {
+    const { rows } = await pgPool.query(
+      `SELECT COUNT(*) FROM user_roles WHERE role_id = $1`,
+      [roleId]
+    );
+    return parseInt(rows[0].count);
   },
 
   /**
@@ -49,7 +111,6 @@ export const rolesRepo = {
              RETURNING *`,
       [userId, roleId]
     );
-
     return mapRow(rows[0]);
   },
 
@@ -75,7 +136,6 @@ export const rolesRepo = {
       `DELETE FROM user_roles WHERE user_id = $1 AND role_id = $2`,
       [userId, roleId]
     );
-
     return rowCount > 0;
   },
 
@@ -93,7 +153,6 @@ export const rolesRepo = {
              WHERE ur.user_id = $1`,
       [userId]
     );
-
     return mapRows(rows);
   },
 };

@@ -1,19 +1,109 @@
+/**
+ * @module Routes/Orders
+ *
+ * ORDRE DES ROUTES (critique) :
+ * Express évalue les routes dans l'ordre de déclaration.
+ * Les routes statiques (/preview, /checkout, /track-guest, /my-orders)
+ * sont déclarées AVANT les routes paramétriques (/:orderId) pour ne pas
+ * être capturées comme valeurs de paramètre.
+ */
 import { Router } from 'express';
 import { orderController } from '../controllers/order.controller.js';
 import { protect } from '../middlewares/auth.middleware.js';
+import { optionalAuth } from '../middlewares/optionalAuth.middleware.js';
 import { restrictTo } from '../middlewares/role.middleware.js';
+import { trackingGuestLimiter } from '../config/security.js';
+import { validateRequired, validateEmail, validateUUID } from '../utils/validation.js';
+import { AppError } from '../utils/appError.js';
+import { HTTP_STATUS } from '../constants/httpStatus.js';
 
 const router = Router();
 
-router.use(protect);
+// ─────────────────────────────────────────────────────────────────────
+// 1. ROUTES STATIQUES — GUEST / OPTIONNEL
+// ─────────────────────────────────────────────────────────────────────
 
-// Client : Voir ses commandes et passer commande
-router.get('/my-orders', orderController.getMyOrders);
-router.get('/:orderId', orderController.getOrderDetail);
-router.post('/checkout', orderController.checkout);
+router.post('/preview', optionalAuth, orderController.previewTotal);
 
-// Admin : Gérer toutes les commandes du système
-router.get('/', restrictTo('ADMIN'), orderController.getAllOrders);
-router.patch('/:orderId/status', restrictTo('ADMIN'), orderController.updateStatus);
+router.post('/checkout', optionalAuth, orderController.checkout);
+
+/**
+ * POST /api/v1/orders/track-guest
+ * Suivi de commande par numéro + email (guests uniquement).
+ * Rate limiting strict pour prévenir l'énumération de commandes.
+ */
+router.post('/track-guest',
+    trackingGuestLimiter,
+    (req, _res, next) => {
+        validateRequired(req.body, ['orderNumber', 'email']);
+        validateEmail(req.body.email);
+
+        if (!/^ORD-\d{4}-\d{6}$/.test(req.body.orderNumber)) {
+            throw new AppError('Format de numéro de commande invalide', HTTP_STATUS.BAD_REQUEST);
+        }
+
+        next();
+    },
+    orderController.trackGuestOrder
+);
+
+// ─────────────────────────────────────────────────────────────────────
+// 2. ROUTES STATIQUES — AUTHENTIFIÉES
+// Déclarées avant /:orderId pour ne pas être capturées comme UUID
+// ─────────────────────────────────────────────────────────────────────
+
+router.get('/my-orders', protect, orderController.getMyOrders);
+
+// ─────────────────────────────────────────────────────────────────────
+// 3. ADMINISTRATION
+// ─────────────────────────────────────────────────────────────────────
+
+router.get('/', protect, restrictTo('ADMIN'), orderController.getAllOrders);
+
+// ─────────────────────────────────────────────────────────────────────
+// 4. ROUTES PARAMÉTRIQUES /:orderId — en dernier
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/v1/orders/:orderId
+ * Mode authentifié : vérifie la propriété via req.user.
+ * Mode guest : requiert ?email= pour vérification timing-safe côté service.
+ * trackingGuestLimiter protège les deux modes contre l'énumération.
+ */
+router.get('/:orderId',
+    trackingGuestLimiter,
+    optionalAuth,
+    (req, _res, next) => {
+        validateUUID(req.params.orderId, 'orderId');
+        next();
+    },
+    orderController.getOrderDetail
+);
+
+/**
+ * POST /api/v1/orders/:orderId/claim
+ * Rattache une commande guest au compte de l'utilisateur connecté.
+ * Dès que le claim réussit, la commande devient invisible pour tout accès guest.
+ */
+router.post('/:orderId/claim',
+    protect,
+    (req, _res, next) => {
+        validateRequired(req.body, ['email']);
+        validateEmail(req.body.email);
+        validateUUID(req.params.orderId, 'orderId');
+        next();
+    },
+    orderController.claimOrder
+);
+
+/**
+ * PATCH /api/v1/orders/:orderId/status
+ * ADMINISTRATION : mise à jour du statut d'une commande.
+ */
+router.patch('/:orderId/status',
+    protect,
+    restrictTo('ADMIN'),
+    orderController.updateStatus
+);
 
 export default router;

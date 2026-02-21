@@ -1,19 +1,18 @@
 /**
- * @module Controller/User
+ * @module Controller/Users
  *
  * Interface pour la gestion des profils utilisateurs et l'administration des comptes.
- * Les routes admin (getAllUsers, getUserById, deleteUser) sont protégées
- * par le middleware de rôle en amont.
  */
 import { userService } from '../services/users.service.js';
+import { orderService } from '../services/orders.service.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
-import { AppError } from '../utils/appError.js';
 
 class UserController {
     /**
-     * Récupère le profil d'un utilisateur.
-     * Fonctionne pour /me (req.user.id) et pour la route admin /:id (req.params.id), évitant de créer deux handlers distincts.
+     * Récupère le profil d'un utilisateur avec statistiques.
+     * Fonctionne pour /me (req.user.id) et pour la route admin /:id (req.params.id),
+     * évitant de créer deux handlers distincts.
      */
     getProfile = asyncHandler(async (req, res) => {
         const targetId = req.params.id || req.user.id;
@@ -25,10 +24,13 @@ class UserController {
         });
     });
 
-    /** Met à jour les informations du profil de l'utilisateur connecté */
     updateProfile = asyncHandler(async (req, res) => {
         const { firstName, lastName, phone } = req.body;
-        const updatedUser = await userService.updateUser(req.user.id, { firstName, lastName, phone });
+        const updatedUser = await userService.updateProfile(req.user.id, {
+            firstName,
+            lastName,
+            phone,
+        });
 
         res.status(HTTP_STATUS.OK).json({
             status: 'success',
@@ -37,47 +39,83 @@ class UserController {
         });
     });
 
-    /** ADMINISTRATION : Liste tous les comptes utilisateurs */
-    getAllUsers = asyncHandler(async (req, res) => {
-        const users = await userService.listAllUsers();
-
-        res.status(HTTP_STATUS.OK).json({
-            status: 'success',
-            results: users.length,
-            data: { users },
-        });
-    });
-
-    /** ADMINISTRATION : Récupère un utilisateur par son ID */
-    getUserById = asyncHandler(async (req, res) => {
-        const user = await userService.getUserProfile(req.params.id);
-
-        res.status(HTTP_STATUS.OK).json({
-            status: 'success',
-            data: { user },
-        });
-    });
-
-    /** ADMINISTRATION : Supprime un compte utilisateur */
-    deleteUser = asyncHandler(async (req, res) => {
-        await userService.deleteUser(req.params.id);
-
-        res.status(HTTP_STATUS.NO_CONTENT).send();
-    });
-
-    /** Change le mot de passe de l'utilisateur connecté après vérification de l'ancien */
     updatePassword = asyncHandler(async (req, res) => {
         const { oldPassword, newPassword } = req.body;
-
-        if (!oldPassword || !newPassword) {
-            throw new AppError('Veuillez fournir l\'ancien et le nouveau mot de passe', HTTP_STATUS.BAD_REQUEST);
-        }
-
         await userService.changePassword(req.user.id, { oldPassword, newPassword });
 
         res.status(HTTP_STATUS.OK).json({
             status: 'success',
             message: 'Mot de passe mis à jour avec succès',
+        });
+    });
+
+    /**
+     * GET /api/v1/users/me/orders
+     * Historique paginé des commandes de l'utilisateur connecté.
+     */
+    getMyOrders = asyncHandler(async (req, res) => {
+        const { page, limit, status } = req.query;
+
+        const result = await orderService.getOrderHistory(req.user.id, {
+            page: parseInt(page, 10) || 1,
+            limit: parseInt(limit, 10) || 10,
+            status,
+        });
+
+        res.status(HTTP_STATUS.OK).json({
+            status: 'success',
+            results: result.orders.length,
+            data: {
+                orders: result.orders,
+                pagination: result.pagination,
+            },
+        });
+    });
+
+    /**
+     * ADMINISTRATION : Liste tous les comptes utilisateurs avec filtres et pagination.
+     */
+    getAllUsers = asyncHandler(async (req, res) => {
+        // NOUVEAU : On extrait les paramètres de requête et on les passe au service
+        const queryParams = {
+            search: req.query.search || null,
+            page: parseInt(req.query.page, 10) || 1,
+            limit: parseInt(req.query.limit, 10) || 10,
+        };
+
+        const result = await userService.listAllUsers(queryParams);
+
+        res.status(HTTP_STATUS.OK).json({
+            status: 'success',
+            data: {
+                users: result.users || result || [],
+                pagination: result.pagination || null
+            },
+        });
+    });
+
+    /**
+         * ADMINISTRATION : Supprime un compte utilisateur.
+         */
+    deleteUser = asyncHandler(async (req, res) => {
+        // AJOUT : On passe l'ID de l'admin actuel (req.user.id) au service
+        await userService.deleteUser(req.params.id, req.user.id);
+        res.status(HTTP_STATUS.NO_CONTENT).send();
+    });
+
+    /**
+     * ADMINISTRATION : Met à jour le rôle et/ou le statut (isActive) d'un compte.
+     */
+    updatePrivileges = asyncHandler(async (req, res) => {
+        const { role, isActive } = req.body;
+
+        // AJOUT : On passe l'ID de l'admin actuel (req.user.id) au service
+        const updatedUser = await userService.updatePrivileges(req.params.id, { role, isActive }, req.user.id);
+
+        res.status(HTTP_STATUS.OK).json({
+            status: 'success',
+            message: 'Privilèges mis à jour avec succès',
+            data: { user: updatedUser },
         });
     });
 }

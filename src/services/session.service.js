@@ -1,9 +1,12 @@
 /**
  * @module Service/Session
+ *
  * Gère la persistance des sessions avec une stratégie de cache hybride (Redis + DB).
+ * Redis est utilisé comme couche rapide ; PostgreSQL reste la source de vérité.
  */
 import { refreshTokensRepo } from '../repositories/index.js';
-import { cacheService } from './cache.service.js'; // Ton nouveau service
+import { cacheService } from './cache.service.js';
+import { logError } from '../utils/logger.js';
 import { ENV } from '../config/environment.js';
 
 class SessionService {
@@ -35,11 +38,10 @@ class SessionService {
 
         const expiresAt = new Date(Date.now() + this.#cookieOptions.maxAge);
 
-        // 1. Persistance en Base de Données (Source de vérité)
         await refreshTokensRepo.create({ userId, token: refreshToken, expiresAt });
 
-        // 2. Mise en cache pour accès rapide (TTL synchronisé avec le cookie)
-        // On stocke l'ID utilisateur pour éviter une requête DB au refresh
+        // Le TTL Redis est synchronisé avec le cookie pour éviter des sessions
+        // valides en DB mais absentes du cache (incohérence self-healing).
         await cacheService.set(
             `session:${refreshToken}`,
             { userId, expiresAt },
@@ -50,24 +52,23 @@ class SessionService {
     async validateSession(refreshToken) {
         if (!refreshToken) return null;
 
-        // --- ÉTAPE 1 : Tentative via Redis (Ultra rapide) ---
         try {
             const cachedSession = await cacheService.get(`session:${refreshToken}`);
             if (cachedSession) return cachedSession;
-        } catch (err) {
-            // Si Redis échoue, on loggue mais on ne bloque pas l'utilisateur
-            console.error('CacheService Error (Validate):', err);
+        } catch (error) {
+            // Si Redis est indisponible, on continue vers PostgreSQL plutôt que
+            // de bloquer l'utilisateur — le cache est une optimisation, pas une source de vérité.
+            logError(error, { context: 'CacheService validateSession' });
         }
 
-        // --- ÉTAPE 2 : Fallback via PostgreSQL ---
         const session = await refreshTokensRepo.findByToken(refreshToken);
 
-        // --- ÉTAPE 3 : Remplissage du cache (Self-healing) ---
+        // Self-healing : reconstruction du cache si la session existe en DB mais pas dans Redis.
         if (session) {
             await cacheService.set(
                 `session:${refreshToken}`,
                 { userId: session.userId, expiresAt: session.expiresAt },
-                3600 // On remet pour 1h par exemple
+                3600
             );
         }
 
@@ -77,14 +78,11 @@ class SessionService {
     async deleteSession(refreshToken) {
         if (!refreshToken) return;
 
-        // Trouver la session pour avoir l'ID numérique (correction bug audit)
         const session = await refreshTokensRepo.findByToken(refreshToken);
 
         await Promise.all([
-            // Supprimer en DB par ID si la session existe
             session ? refreshTokensRepo.revokeById(session.id) : Promise.resolve(),
-            // Supprimer du cache Redis
-            cacheService.delete(`session:${refreshToken}`)
+            cacheService.delete(`session:${refreshToken}`),
         ]);
     }
 }

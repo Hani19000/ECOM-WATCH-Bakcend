@@ -11,7 +11,6 @@ import { HTTP_STATUS } from '../constants/httpStatus.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 
 export const protect = asyncHandler(async (req, res, next) => {
-    // Extraction du token depuis le header — seul le schéma Bearer est accepté
     let token;
     if (req.headers.authorization?.startsWith('Bearer')) {
         token = req.headers.authorization.split(' ')[1];
@@ -26,15 +25,15 @@ export const protect = asyncHandler(async (req, res, next) => {
         throw new AppError('Token invalide ou expiré.', HTTP_STATUS.UNAUTHORIZED);
     }
 
-    // On supporte à la fois `id` (claim custom) et `sub` (claim standard JWT RFC 7519)
-    // pour rester compatible avec différents providers si nécessaire
     const user = await usersRepo.findById(decoded.id || decoded.sub);
     if (!user) {
         throw new AppError("L'utilisateur associé à ce token n'existe plus.", HTTP_STATUS.UNAUTHORIZED);
     }
 
-    // Les rôles sont récupérés en base plutôt qu'embarqués dans le token
-    // pour refléter immédiatement tout changement de rôle sans attendre l'expiration du JWT
+    if (user.isActive === false) {
+        throw new AppError('Ce compte a été suspendu. Accès révoqué.', HTTP_STATUS.FORBIDDEN);
+    }
+
     const roles = await rolesRepo.listUserRoles(user.id);
 
     req.user = {

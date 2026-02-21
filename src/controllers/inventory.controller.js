@@ -65,6 +65,18 @@ class InventoryController {
             data: { stock },
         });
     });
+
+    /**
+     * ADMINISTRATION : Liste globale de l'inventaire avec filtres et pagination
+     */
+    getAllInventory = asyncHandler(async (req, res) => {
+        const result = await inventoryService.getAllInventory(req.query);
+
+        res.status(HTTP_STATUS.OK).json({
+            status: 'success',
+            data: result
+        });
+    });
 }
 
 export const inventoryController = new InventoryController();

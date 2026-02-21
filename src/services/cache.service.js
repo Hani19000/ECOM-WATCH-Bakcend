@@ -1,3 +1,9 @@
+/**
+ * @module Service/Cache
+ *
+ * Encapsule l'accès à Redis avec sérialisation/désérialisation JSON automatique.
+ * Singleton pour garantir une seule connexion Redis partagée dans l'application.
+ */
 import { createClient } from 'redis';
 import { ENV } from '../config/environment.js';
 import { logInfo, logError } from '../utils/logger.js';
@@ -7,14 +13,13 @@ class CacheService {
         if (CacheService.instance) return CacheService.instance;
 
         const { host, port, password } = ENV.database.redis;
-        const url = `redis://${host}:${port}`;
 
         this.client = createClient({
-            url,
-            password
+            url: `redis://${host}:${port}`,
+            password,
         });
 
-        this.client.on('error', (err) => logError('Redis Client Error', err));
+        this.client.on('error', (err) => logError(err, { context: 'Redis Client Error' }));
         this.client.on('connect', () => logInfo('Redis connecté avec succès'));
 
         this.connect();
@@ -28,14 +33,8 @@ class CacheService {
         }
     }
 
-    /**
-     * @param {string} key 
-     * @param {any} value - Sera stringifié en JSON
-     * @param {number} ttl - Durée de vie en secondes
-     */
     async set(key, value, ttl = 3600) {
-        const data = JSON.stringify(value);
-        await this.client.set(key, data, { EX: ttl });
+        await this.client.set(key, JSON.stringify(value), { EX: ttl });
     }
 
     async get(key) {
@@ -45,6 +44,15 @@ class CacheService {
 
     async delete(key) {
         await this.client.del(key);
+    }
+
+    /**
+     * Supprime plusieurs clés en une seule opération.
+     * Utilisé pour invalider le cache d'un produit et toutes ses entrées de catalogue liées.
+     */
+    async deleteMany(keys) {
+        if (!keys || keys.length === 0) return;
+        await Promise.all(keys.map((key) => this.delete(key)));
     }
 }
 

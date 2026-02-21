@@ -23,7 +23,10 @@ const requiredEnv = [
     // 'MAIL_USER',
     // 'MAIL_PASS',
     'REDIS_HOST',
-    'REDIS_PORT'
+    'REDIS_PORT',
+    'CLIENT_URL',
+    'STRIPE_SECRET_KEY',
+    'STRIPE_WEBHOOK_SECRET'
 ];
 
 const missingEnv = requiredEnv.filter((key) => !process.env[key]);
@@ -54,7 +57,7 @@ export const ENV = Object.freeze({
     },
     jwt: {
         accessTokenSecret: process.env.JWT_ACCESS_SECRET,
-        accessTokenExpiry: process.env.JWT_ACCESS_EXPIRY || '15m',
+        accessTokenExpiry: process.env.JWT_ACCESS_EXPIRY || '60m',
         refreshTokenSecret: process.env.JWT_REFRESH_SECRET,
         refreshTokenExpiry: process.env.JWT_REFRESH_EXPIRY || '7d',
     },

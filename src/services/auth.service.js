@@ -2,13 +2,24 @@
  * @module Service/Auth
  *
  * Orchestre l'inscription, la connexion et le renouvellement de session.
+ *
+ * SÉCURITÉ :
+ * - Email normalisé (lowercase) pour éviter les doublons
+ * - Messages génériques sur échec (pas de révélation d'existence email)
+ * - Transactions atomiques (user + rôle en une seule opération)
+ * - Notifications fire-and-forget (ne bloquent pas le flux principal)
+ * - Auto-claim des commandes guest après inscription
  */
 import { usersRepo, rolesRepo } from '../repositories/index.js';
 import { passwordService } from './password.service.js';
 import { tokenService } from './token.service.js';
 import { sessionService } from './session.service.js';
+import { orderService } from './orders.service.js';
 import { AppError } from '../utils/appError.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
+import { pgPool } from '../config/database.js';
+import { notificationService } from './notifications/notification.service.js';
+import { logInfo, logError } from '../utils/logger.js';
 
 class AuthService {
     constructor() {
@@ -18,9 +29,18 @@ class AuthService {
     }
 
     /**
-     * Factorise la génération des tokens et la persistance de session,
-     * partagée entre register et login pour rester DRY.
-     * Retourne les tokens au contrôleur qui se charge de poser le cookie.
+     * Factorise la génération des tokens et la persistance de session.
+     * Partagée entre register et login pour rester DRY.
+     *
+     * CORRECTION : `roles` est maintenant inclus dans l'objet `user` retourné.
+     * Sans cela, le frontend ne connaît pas les rôles au moment du login —
+     * il les obtient seulement après un refresh (reload page), ce qui empêche
+     * l'affichage conditionnel basé sur les rôles (ex : lien dashboard admin).
+     *
+     * Le paramètre `user` contient déjà les rôles (hydratés par login/register)
+     * — ils étaient simplement strippés dans le return précédent.
+     *
+     * @param {{ id, email, firstName, roles: string[] }} user
      */
     async #createAuthSession(user) {
         const accessToken = tokenService.generateAccessToken(user);
@@ -29,38 +49,99 @@ class AuthService {
         await sessionService.createSession(user.id, refreshToken);
 
         return {
-            user: { id: user.id, email: user.email, firstName: user.firstName },
+            user: {
+                id: user.id,
+                email: user.email,
+                firstName: user.firstName,
+                roles: user.roles ?? [],   // ← CORRECTION : roles inclus
+            },
             accessToken,
             refreshToken,
         };
     }
 
+    /**
+     * Inscription d'un nouvel utilisateur.
+     *
+     * Workflow :
+     * 1. Vérification unicité email
+     * 2. Création utilisateur + attribution rôle (transaction atomique)
+     * 3. Notification d'inscription (fire-and-forget)
+     * 4. Auto-claim des commandes guest avec le même email
+     * 5. Création de la session authentifiée
+     */
     async register({ email, password, firstName, lastName }) {
         const existing = await usersRepo.findByEmail(email);
-        if (existing) throw new AppError('Email déjà utilisé', HTTP_STATUS.CONFLICT);
+        if (existing) {
+            throw new AppError('Email déjà utilisé', HTTP_STATUS.CONFLICT);
+        }
 
-        // Le rôle USER doit exister en base (seedDefaults) ; une absence signale
-        // un problème de configuration serveur, pas une erreur utilisateur.
         const role = await rolesRepo.findByName('USER');
-        if (!role) throw new AppError('Configuration serveur : rôle introuvable', HTTP_STATUS.INTERNAL_SERVER_ERROR);
+        if (!role) {
+            throw new AppError(
+                'Configuration serveur : rôle introuvable',
+                HTTP_STATUS.INTERNAL_SERVER_ERROR
+            );
+        }
 
         const salt = passwordService.generateSalt();
         const passwordHash = await passwordService.hashPassword(password, salt);
 
-        const newUser = await usersRepo.create({ email, passwordHash, salt, firstName, lastName });
+        const client = await pgPool.connect();
+        try {
+            await client.query('BEGIN');
 
-        await rolesRepo.addUserRole(newUser.id, role.id);
+            const newUser = await usersRepo.create(
+                { email, passwordHash, salt, firstName, lastName },
+                client
+            );
 
-        const userWithRoles = { ...newUser, roles: ['USER'] };
+            await rolesRepo.addUserRole(newUser.id, role.id, client);
 
-        return await this.#createAuthSession(userWithRoles);
+            await client.query('COMMIT');
+
+            this.#sendRegistrationNotification(newUser);
+
+            const claimResult = await orderService.autoClaimGuestOrders(
+                newUser.id,
+                email.trim().toLowerCase()
+            );
+
+            if (claimResult.claimed > 0) {
+                logInfo(`${claimResult.claimed} commande(s) rattachée(s) à ${newUser.id}`);
+            } else if (claimResult.error) {
+                logError(new Error(claimResult.error), { context: 'auto-claim register', userId: newUser.id });
+            }
+
+            const userWithRoles = { ...newUser, roles: [role.name] };
+            const session = await this.#createAuthSession(userWithRoles);
+
+            return {
+                ...session,
+                claimedOrders: claimResult.claimed || 0,
+                claimedOrderNumbers: claimResult.claimedOrderNumbers || [],
+            };
+
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
     }
 
+    /**
+     * Connexion d'un utilisateur.
+     * Message générique sur échec pour ne pas révéler l'existence d'un compte.
+     */
     async login({ email, password }) {
         const user = await usersRepo.findByEmail(email);
 
-        // Message volontairement générique pour ne pas indiquer si l'email existe ou non.
         if (!user) throw new AppError('Identifiants invalides', HTTP_STATUS.UNAUTHORIZED);
+
+        if (user.isActive === false) {
+            throw new AppError('Ce compte a été suspendu. Veuillez contacter le support.', HTTP_STATUS.FORBIDDEN);
+        }
 
         const isValid = await passwordService.comparePassword(password, user.passwordHash, user.salt);
         if (!isValid) throw new AppError('Identifiants invalides', HTTP_STATUS.UNAUTHORIZED);
@@ -68,34 +149,70 @@ class AuthService {
         const roles = await rolesRepo.listUserRoles(user.id);
         const userWithRoles = { ...user, roles: roles.map((r) => r.name) };
 
+        // userWithRoles.roles est maintenant transmis jusqu'au return de #createAuthSession
         return await this.#createAuthSession(userWithRoles);
     }
 
+    /**
+     * Déconnexion — supprime la session du whitelist (Redis + DB).
+     * Silencieux si le refreshToken est absent ou invalide.
+     */
     async logout(refreshToken) {
         if (!refreshToken) return;
         await sessionService.deleteSession(refreshToken);
     }
 
+    /**
+     * Renouvellement de l'access token.
+     */
     async refreshAccessToken(refreshToken) {
-        const session = await sessionService.validateSession(refreshToken);
-        if (!session) throw new AppError('Session invalide ou expirée', HTTP_STATUS.UNAUTHORIZED);
-
         const payload = tokenService.verifyRefreshToken(refreshToken);
         if (!payload) {
-            // Suppression proactive pour éviter qu'un token expiré reste en base.
             await sessionService.deleteSession(refreshToken);
-            throw new AppError('Token expiré', HTTP_STATUS.UNAUTHORIZED);
+            throw new AppError('Token expiré ou invalide', HTTP_STATUS.UNAUTHORIZED);
+        }
+
+        const session = await sessionService.validateSession(refreshToken);
+        if (!session) {
+            throw new AppError('Session invalide ou expirée', HTTP_STATUS.UNAUTHORIZED);
         }
 
         const user = await usersRepo.findById(payload.sub);
+        if (!user) {
+            await sessionService.deleteSession(refreshToken);
+            throw new AppError('Utilisateur introuvable', HTTP_STATUS.UNAUTHORIZED);
+        }
+
         const roles = await rolesRepo.listUserRoles(user.id);
+        const userRoles = roles.map((r) => r.name);
 
-        const accessToken = tokenService.generateAccessToken({
-            ...user,
-            roles: roles.map((r) => r.name),
-        });
+        const accessToken = tokenService.generateAccessToken({ ...user, roles: userRoles });
 
-        return { accessToken };
+        return {
+            accessToken,
+            user: {
+                id: user.id,
+                email: user.email,
+                firstName: user.firstName,
+                roles: userRoles,
+            },
+        };
+    }
+
+    /**
+     * Notification d'inscription en fire-and-forget.
+     */
+    #sendRegistrationNotification(user) {
+        try {
+            const result = notificationService.notifyUserRegistered(user);
+            if (result && typeof result.catch === 'function') {
+                result.catch((error) =>
+                    logError(error, { context: 'notification inscription', userId: user.id })
+                );
+            }
+        } catch (error) {
+            logError(error, { context: 'notification inscription', userId: user.id });
+        }
     }
 }
 

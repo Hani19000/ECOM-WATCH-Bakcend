@@ -1,19 +1,44 @@
 /**
  * @module Service/Shipping
  *
- * Gère les frais de port, les adresses de livraison et le suivi des expéditions.
+ * Gère les frais de port avec calcul basé sur le poids, la zone et le type de service.
+ * Intègre les adresses de livraison et le suivi des expéditions.
  */
 import { shipmentsRepo, ordersRepo, addressesRepo } from '../repositories/index.js';
+import { cacheService } from './cache.service.js';
 import { AppError } from '../utils/appError.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
 
 class ShippingService {
-    // Tarifs centralisés ici pour qu'un changement tarifaire ne nécessite
-    // pas de toucher à la logique de calcul.
+    // Grille tarifaire centralisée par zone géographique.
+    // Permet d'ajuster les tarifs sans modifier la logique de calcul.
     #shippingRates = {
-        FRANCE: { base: 5.90, perItem: 0.50 },
-        EUROPE: { base: 12.50, perItem: 1.50 },
-        INTERNATIONAL: { base: 25.00, perItem: 5.00 },
+        FRANCE: {
+            STANDARD: { base: 5.90, perKg: 0.50, freeAbove: 50 },
+            EXPRESS: { base: 9.90, perKg: 1.00, freeAbove: 100 },
+            RELAY: { base: 3.90, perKg: 0.30, freeAbove: 40 },
+        },
+        EUROPE: {
+            STANDARD: { base: 12.50, perKg: 1.50, freeAbove: 80 },
+            EXPRESS: { base: 24.90, perKg: 3.00, freeAbove: 150 },
+        },
+        INTERNATIONAL: {
+            STANDARD: { base: 25.00, perKg: 5.00, freeAbove: 200 },
+            EXPRESS: { base: 45.00, perKg: 8.00, freeAbove: null },
+        },
+    };
+
+    // Mapping pays → zone pour simplifier les lookups.
+    #countryZones = {
+        France: 'FRANCE',
+        Belgium: 'EUROPE',
+        Germany: 'EUROPE',
+        Spain: 'EUROPE',
+        Italy: 'EUROPE',
+        Netherlands: 'EUROPE',
+        Portugal: 'EUROPE',
+        Switzerland: 'EUROPE',
+        DEFAULT: 'INTERNATIONAL',
     };
 
     constructor() {
@@ -22,29 +47,122 @@ class ShippingService {
         Object.freeze(this);
     }
 
-    async calculateRates(cartId, { country }) {
-        const zone = country === 'France' ? 'FRANCE' : 'EUROPE';
-        const cost = this.calculateShippingCost(zone, 1);
+    #getZone(country) {
+        return this.#countryZones[country] || this.#countryZones.DEFAULT;
+    }
+
+    /**
+     * Calcule les frais de port selon le poids total, la zone et le mode de livraison.
+     * Applique automatiquement le franco si le seuil de commande est atteint.
+     */
+    calculateShippingCost(country, totalWeight, shippingMethod = 'STANDARD', cartSubtotal = 0) {
+        const zone = this.#getZone(country);
+        const rates = this.#shippingRates[zone];
+
+        if (!rates || !rates[shippingMethod]) {
+            throw new AppError(
+                `Méthode de livraison "${shippingMethod}" non disponible pour ${country}`,
+                HTTP_STATUS.BAD_REQUEST
+            );
+        }
+
+        const { base, perKg, freeAbove } = rates[shippingMethod];
+
+        if (freeAbove !== null && cartSubtotal >= freeAbove) {
+            return {
+                cost: 0,
+                isFree: true,
+                zone,
+                method: shippingMethod,
+                estimatedDays: this.#getEstimatedDelivery(zone, shippingMethod),
+            };
+        }
 
         return {
-            carrier: 'COLLISIMO',
-            price: cost,
-            estimatedDays: zone === 'FRANCE' ? 2 : 5,
+            cost: Math.round((base + perKg * totalWeight) * 100) / 100,
+            isFree: false,
+            zone,
+            method: shippingMethod,
+            estimatedDays: this.#getEstimatedDelivery(zone, shippingMethod),
         };
     }
 
+    #getEstimatedDelivery(zone, method) {
+        const estimates = {
+            FRANCE: { STANDARD: '2-3', EXPRESS: '24h', RELAY: '3-5' },
+            EUROPE: { STANDARD: '5-7', EXPRESS: '2-3' },
+            INTERNATIONAL: { STANDARD: '10-15', EXPRESS: '5-7' },
+        };
+        return estimates[zone]?.[method] || '7-14';
+    }
+
+    /**
+     * Retourne toutes les options de livraison disponibles pour un pays donné.
+     * Mis en cache car les tarifs ne changent pas à chaque requête.
+     */
+    async getAvailableOptions(country, totalWeight, cartSubtotal = 0) {
+        const cacheKey = `shipping:options:${country}:${totalWeight}:${cartSubtotal}`;
+        const cached = await cacheService.get(cacheKey);
+        if (cached) return cached;
+
+        const zone = this.#getZone(country);
+        const methods = Object.keys(this.#shippingRates[zone] || {});
+
+        const options = methods.map((method) => {
+            const { cost, isFree, estimatedDays } = this.calculateShippingCost(
+                country, totalWeight, method, cartSubtotal
+            );
+            return { method, cost, isFree, estimatedDays, label: this.#getMethodLabel(method) };
+        });
+
+        await cacheService.set(cacheKey, options, 3600);
+        return options;
+    }
+
+    #getMethodLabel(method) {
+        const labels = {
+            STANDARD: 'Livraison Standard',
+            EXPRESS: 'Livraison Express',
+            RELAY: 'Point Relais',
+        };
+        return labels[method] || method;
+    }
+
+    /**
+     * @deprecated Utiliser calculateShippingCost à la place.
+     * Conservé pour compatibilité avec l'ancien code.
+     */
+    async calculateRates(cartId, { country }) {
+        const zone = this.#getZone(country);
+        const rate = this.#shippingRates[zone]?.STANDARD;
+
+        if (!rate) {
+            throw new AppError('Zone de livraison non supportée', HTTP_STATUS.BAD_REQUEST);
+        }
+
+        return {
+            carrier: 'COLISSIMO',
+            price: rate.base + rate.perKg,
+            estimatedDays: this.#getEstimatedDelivery(zone, 'STANDARD'),
+        };
+    }
+
+    // === GESTION DES ADRESSES ===
+
     async getUserAddresses(userId) {
-        return await addressesRepo.findByUserId(userId);
+        const cacheKey = `user:${userId}:addresses`;
+        const cached = await cacheService.get(cacheKey);
+        if (cached) return cached;
+
+        const addresses = await addressesRepo.findByUserId(userId);
+        await cacheService.set(cacheKey, addresses, 1800);
+        return addresses;
     }
 
     async createAddress(userId, addressData) {
-        const payload = {
-            ...addressData,
-            country: addressData.country || 'France',
-            isDefault: addressData.isDefault || false,
-        };
-
-        return await addressesRepo.create(userId, payload);
+        const address = await addressesRepo.create(userId, addressData);
+        await cacheService.delete(`user:${userId}:addresses`);
+        return address;
     }
 
     async deleteAddress(userId, addressId) {
@@ -52,21 +170,13 @@ class ShippingService {
         if (!deleted) throw new AppError('Adresse non trouvée', HTTP_STATUS.NOT_FOUND);
     }
 
-    /**
-     * La méthode est synchrone car le calcul est purement arithmétique.
-     * Le fallback sur INTERNATIONAL protège contre une zone inconnue
-     * sans lever d'erreur qui bloquerait le checkout.
-     */
-    calculateShippingCost(zone, itemCount) {
-        const rate = this.#shippingRates[zone] || this.#shippingRates.INTERNATIONAL;
-        return rate.base + rate.perItem * itemCount;
-    }
+    // === GESTION DES EXPÉDITIONS ===
 
     /**
-     * Une expédition ne peut être créée que sur une commande PAID
-     * pour éviter d'expédier avant confirmation du paiement.
+     * Crée une expédition avec numéro de suivi.
+     * Seules les commandes PAID peuvent être expédiées pour éviter les erreurs logistiques.
      */
-    async createShipment(orderId, carrier = 'COLLISIMO') {
+    async createShipment(orderId, carrier = 'COLISSIMO') {
         const order = await ordersRepo.findById(orderId);
         if (!order) throw new AppError('Commande introuvable', HTTP_STATUS.NOT_FOUND);
 
@@ -74,7 +184,10 @@ class ShippingService {
             throw new AppError('La commande doit être payée avant expédition', HTTP_STATUS.BAD_REQUEST);
         }
 
-        const trackingNumber = `${carrier.substring(0, 3)}-${Math.random().toString(36).toUpperCase().substring(2, 10)}`;
+        const trackingNumber = `${carrier.substring(0, 3)}-${Math.random()
+            .toString(36)
+            .toUpperCase()
+            .substring(2, 10)}`;
 
         const shipment = await shipmentsRepo.create({
             orderId,
@@ -84,29 +197,41 @@ class ShippingService {
         });
 
         await ordersRepo.updateStatus(orderId, 'SHIPPING_IN_PROGRESS');
-
         return shipment;
     }
 
+    /**
+     * Met à jour le statut de l'expédition et propage le changement à la commande.
+     * La livraison confirmée déclenche automatiquement la clôture de la commande.
+     */
     async updateTracking(shipmentId, status, currentLocation = '') {
-        const shipment = await shipmentsRepo.findById(shipmentId);
-        if (!shipment) throw new AppError('Expédition introuvable', HTTP_STATUS.NOT_FOUND);
-
         const updated = await shipmentsRepo.update(shipmentId, {
             status,
             currentLocation,
             updatedAt: new Date(),
         });
 
-        // Ferme la commande dès que la livraison est confirmée.
         if (status === 'DELIVERED') {
+            const shipment = await shipmentsRepo.findById(shipmentId);
             await ordersRepo.updateStatus(shipment.orderId, 'COMPLETED');
+            await cacheService.delete(`order:${shipment.orderId}`);
         }
 
         return updated;
     }
 
     async getShipmentByOrder(orderId) {
+        return await shipmentsRepo.findByOrderId(orderId);
+    }
+
+    async getShipmentForUser(orderId, userId) {
+        const order = await ordersRepo.findById(orderId);
+
+        // Vérification de propriété
+        if (!order || order.userId !== userId) {
+            throw new AppError('Accès non autorisé à cette expédition', HTTP_STATUS.FORBIDDEN);
+        }
+
         return await shipmentsRepo.findByOrderId(orderId);
     }
 }

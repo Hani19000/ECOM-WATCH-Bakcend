@@ -14,12 +14,21 @@ export const paymentsRepo = {
    * Le statut initial est PENDING ; il sera mis à jour via setStatus
    * après confirmation du prestataire de paiement.
    */
-  async create({ orderId, provider, paymentIntentId, status = 'PENDING', amount }, client = pgPool) {
+  // Mise à jour suggérée pour create
+  async create({ orderId, provider, paymentIntentId, status = 'PENDING', amount, currency = 'EUR', metadata = {} }, client = pgPool) {
     const { rows } = await client.query(
-      `INSERT INTO payments (order_id, provider, payment_intent_id, status, amount)
-             VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO payments (order_id, provider, payment_intent_id, status, amount, currency, metadata)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
              RETURNING *`,
-      [orderId, provider ?? null, paymentIntentId ?? null, status, amount]
+      [
+        orderId,
+        provider ?? null,
+        paymentIntentId ?? null,
+        status,
+        amount,
+        currency,
+        metadata
+      ]
     );
 
     return mapRow(rows[0]);

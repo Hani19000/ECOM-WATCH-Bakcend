@@ -15,4 +15,5 @@ export { cartsRepo } from './carts.repo.js';
 export { ordersRepo } from './orders.repo.js';
 export { paymentsRepo } from './payments.repo.js';
 export { shipmentsRepo } from './shipments.repo.js';
-export { addressesRepo } from './adresses.repo.js'
+export { addressesRepo } from './adresses.repo.js';
+export { promotionsRepo } from './promotions.repo.js';

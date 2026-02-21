@@ -51,14 +51,53 @@ export const usersRepo = {
    * Une projection explicite ici plutôt qu'un SELECT * protège contre
    * une fuite accidentelle de credentials si la réponse est sérialisée telle quelle.
    */
-  async list() {
-    const { rows } = await pgPool.query(
-      `SELECT id, email, first_name, last_name, phone, is_active, created_at
-             FROM users
-             ORDER BY created_at DESC`
-    );
+  async list(params = {}) {
+    const { search, limit = 10, page = 1 } = params;
+    const offset = (page - 1) * limit;
 
-    return mapRows(rows);
+    let query = `
+      SELECT id, email, first_name, last_name, phone, is_active, created_at
+      FROM users
+      WHERE 1=1
+    `;
+    const values = [];
+
+    // 1. FILTRAGE : Si une recherche est tapée
+    if (search) {
+      values.push(`%${search}%`);
+      query += ` AND (
+        first_name ILIKE $${values.length} OR 
+        last_name ILIKE $${values.length} OR 
+        email ILIKE $${values.length}
+      )`;
+    }
+
+    // 2. COMPTAGE TOTAL (Indispensable pour la pagination du Frontend)
+    const countQuery = `SELECT COUNT(*) as total FROM (${query}) as subquery`;
+    const countResult = await pgPool.query(countQuery, values);
+    const total = parseInt(countResult.rows[0].total, 10);
+
+    // 3. TRI ET PAGINATION
+    query += ` ORDER BY created_at DESC`;
+
+    values.push(limit);
+    query += ` LIMIT $${values.length}`;
+
+    values.push(offset);
+    query += ` OFFSET $${values.length}`;
+
+    const { rows } = await pgPool.query(query, values);
+
+    // On retourne les utilisateurs mappés (camelCase) + les données de pagination
+    return {
+      users: mapRows(rows),
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit)
+      }
+    };
   },
 
   /**
@@ -92,6 +131,7 @@ export const usersRepo = {
 
     return mapRow(rows[0]);
   },
+
 
   async setActive(id, isActive) {
     validateUUID(id, 'userId');
@@ -143,5 +183,37 @@ export const usersRepo = {
   async count() {
     const { rows } = await pgPool.query("SELECT COUNT(*) FROM users");
     return parseInt(rows[0].count);
+  },
+
+  async getPasswordHistory(userId, limit = 5) {
+    validateUUID(userId, 'userId');
+
+    const { rows } = await pgPool.query(
+      `SELECT password_hash, salt 
+       FROM password_history 
+       WHERE user_id = $1 
+       ORDER BY created_at DESC 
+       LIMIT $2`,
+      [userId, limit]
+    );
+
+    // On utilise mapRows pour normaliser (snake_case to camelCase)
+    return mapRows(rows);
+  },
+
+  /**
+   * Ajoute un ancien hash et son salt dans la table d'historique.
+   */
+  async addToHistory(userId, passwordHash, salt) {
+    validateUUID(userId, 'userId');
+
+    const { rows } = await pgPool.query(
+      `INSERT INTO password_history (user_id, password_hash, salt)
+       VALUES ($1, $2, $3)
+       RETURNING id`,
+      [userId, passwordHash, salt]
+    );
+
+    return rows.length > 0;
   }
 };

@@ -11,6 +11,7 @@ export const ERRORS = Object.freeze({
         TOKEN_EXPIRED: 'Session expirée, veuillez vous reconnecter',
         TOKEN_INVALID: 'Token invalide',
         FORBIDDEN: 'Accès refusé',
+        TOO_MANY_ATTEMPTS: 'Trop de tentatives, veuillez réessayer plus tard',
     },
     VALIDATION: {
         REQUIRED_FIELD: 'Champ requis manquant',

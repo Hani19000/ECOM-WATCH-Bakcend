@@ -31,7 +31,10 @@ export const validateUUID = (value, fieldName = 'ID') => {
     }
 };
 
-/** Valide qu'une valeur appartient à un ensemble de valeurs autorisées */
+/**
+ * Valide qu'une valeur appartient à un tableau de valeurs autorisées.
+ * Pour valider contre un enum PostgreSQL, préférer `assertValidEnum` de constants/enums.js.
+ */
 export const validateEnum = (value, allowedValues, fieldName = 'Field') => {
     if (!allowedValues.includes(value)) {
         throw new ValidationError(
@@ -48,6 +51,8 @@ export const validateInteger = (number, fieldName = 'Quantity') => {
         throw new ValidationError(`${fieldName} doit être un entier positif`);
     }
 };
+
+/** Alias sémantique de validateInteger pour les contextes métier liés aux stocks */
 export const validateQuantity = validateInteger;
 
 /** Rejette les montants invalides pour éviter des erreurs silencieuses en comptabilité */
@@ -85,6 +90,7 @@ export const validatePasswordStrength = (password) => {
     }
 };
 
+/** Valide le format du numéro de téléphone. Optionnel : ignoré si la valeur est absente. */
 export const validatePhone = (phone) => {
     const phoneRegex = /^\+?[0-9\s-]{8,15}$/;
     if (phone && !phoneRegex.test(phone)) {

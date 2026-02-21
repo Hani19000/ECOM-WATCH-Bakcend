@@ -27,8 +27,49 @@ export const shipmentsRepo = {
              RETURNING *`,
       [orderId, carrier ?? null, trackingNumber ?? null]
     );
-
     return mapRow(rows[0]);
+  },
+
+  /**
+   * Met à jour les champs d'une expédition de manière générique.
+   * Appelé par shipping.service.js → updateTracking() avec { status, currentLocation }.
+   * Construit dynamiquement la liste des colonnes à mettre à jour pour n'écrire
+   * que les champs fournis (PATCH sémantique).
+   */
+  async update(id, data) {
+    const columnMap = {
+      status: 'status',
+      currentLocation: 'current_location',
+      carrier: 'carrier',
+      trackingNumber: 'tracking_number',
+      shippedAt: 'shipped_at',
+      deliveredAt: 'delivered_at',
+    };
+
+    const updates = [];
+    const params = [id];
+    let paramIdx = 2;
+
+    for (const [jsKey, sqlCol] of Object.entries(columnMap)) {
+      if (data[jsKey] !== undefined) {
+        updates.push(`${sqlCol} = $${paramIdx++}`);
+        params.push(data[jsKey]);
+      }
+    }
+
+    if (updates.length === 0) return this.findById(id);
+
+    updates.push('updated_at = NOW()');
+
+    const { rows } = await pgPool.query(
+      `UPDATE shipments
+             SET ${updates.join(', ')}
+             WHERE id = $1
+             RETURNING *`,
+      params
+    );
+
+    return assertExists(mapRow(rows[0]), 'Shipment', id);
   },
 
   async updateTracking(id, { carrier, trackingNumber }) {
@@ -41,7 +82,6 @@ export const shipmentsRepo = {
              RETURNING *`,
       [id, carrier ?? null, trackingNumber ?? null]
     );
-
     return assertExists(mapRow(rows[0]), 'Shipment', id);
   },
 
@@ -49,7 +89,6 @@ export const shipmentsRepo = {
    * Enregistre l'horodatage d'expédition.
    * COALESCE permet au service de forcer une date précise (ex : sync depuis transporteur)
    * ou de laisser la base utiliser NOW() par défaut.
-   * Accepte un client de transaction pour être couplé au passage de commande en SHIPPED.
    */
   async markShipped(id, shippedAt = null, client = pgPool) {
     const { rows } = await client.query(
@@ -60,13 +99,11 @@ export const shipmentsRepo = {
              RETURNING *`,
       [id, shippedAt]
     );
-
     return assertExists(mapRow(rows[0]), 'Shipment', id);
   },
 
   /**
    * Enregistre l'horodatage de livraison.
-   * Accepte un client de transaction pour être couplé au passage de commande en DELIVERED.
    */
   async markDelivered(id, deliveredAt = null, client = pgPool) {
     const { rows } = await client.query(
@@ -77,18 +114,15 @@ export const shipmentsRepo = {
              RETURNING *`,
       [id, deliveredAt]
     );
-
     return assertExists(mapRow(rows[0]), 'Shipment', id);
   },
 
   async findByOrderId(orderId) {
     validateUUID(orderId, 'orderId');
-
     const { rows } = await pgPool.query(
       `SELECT * FROM shipments WHERE order_id = $1`,
       [orderId]
     );
-
     return mapRow(rows[0]);
   },
 
@@ -97,7 +131,6 @@ export const shipmentsRepo = {
       `SELECT * FROM shipments WHERE id = $1`,
       [id]
     );
-
     return mapRow(rows[0]);
   },
 };

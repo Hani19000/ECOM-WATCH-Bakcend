@@ -15,6 +15,21 @@ class AdminController {
         res.status(HTTP_STATUS.OK).json({ status: 'success', data: stats });
     });
 
+    /**
+     * GET /api/v1/admin/sales-history?days=30
+     * Historique des ventes journalières pour le graphique du dashboard.
+     * Le paramètre `days` est validé dans adminService.getSalesHistory.
+     */
+    getSalesHistory = asyncHandler(async (req, res) => {
+        const { days = 30 } = req.query;
+        const history = await adminService.getSalesHistory(days);
+
+        res.status(HTTP_STATUS.OK).json({
+            status: 'success',
+            data: { history },
+        });
+    });
+
     /** Modifier le rôle d'un utilisateur (ex: promouvoir en ADMIN) */
     changeUserRole = asyncHandler(async (req, res) => {
         const { userId } = req.params;

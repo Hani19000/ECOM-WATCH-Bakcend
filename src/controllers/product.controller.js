@@ -1,18 +1,12 @@
 /**
  * @module Controller/Product
- *
- * Gère les interactions HTTP pour le catalogue de produits et les variantes.
- * Les opérations d'écriture (create, update, delete) sont réservées aux admins
- * via le middleware de rôle appliqué sur les routes.
  */
 import { productService } from '../services/products.service.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
 
 class ProductController {
-    /** Liste tous les produits du catalogue avec filtres optionnels (category, price, search...) */
     getAll = asyncHandler(async (req, res) => {
-        // req.query peut maintenant contenir { categorySlug: 'montres-luxe', status: 'ACTIVE' }
         const result = await productService.listCatalog(req.query);
 
         res.status(HTTP_STATUS.OK).json({
@@ -25,7 +19,6 @@ class ProductController {
         });
     });
 
-    /** Récupère un produit par son slug (SEO) ou son ID (accès direct) */
     getOne = asyncHandler(async (req, res) => {
         const { idOrSlug } = req.params;
         const product = await productService.getProductDetails(idOrSlug);
@@ -37,13 +30,21 @@ class ProductController {
     });
 
     /**
-     * Crée un produit avec sa première variante.
-     * La variante est séparée du reste du body pour que le service
-     * puisse les persister dans deux tables distinctes atomiquement.
+     * Crée un produit avec sa première variante et son image Cloudinary.
      */
     create = asyncHandler(async (req, res) => {
+        // 1. Extraction de l'URL Cloudinary ajoutée par ton middleware handleUpload
+        const imageUrl = req.file ? req.file.path : null;
+
+        // 2. Récupération des données (rappel : gère le JSON.parse si envoyé via FormData)
         const { variant, ...productData } = req.body;
-        const product = await productService.createProductWithVariant(productData, variant);
+
+        // 3. On passe l'imageUrl au service pour qu'il l'insère dans la transaction
+        const product = await productService.createProductWithVariant(
+            productData,
+            variant,
+            imageUrl
+        );
 
         res.status(HTTP_STATUS.CREATED).json({
             status: 'success',
@@ -51,9 +52,12 @@ class ProductController {
         });
     });
 
-    /** Met à jour les informations d'un produit existant */
     update = asyncHandler(async (req, res) => {
-        const product = await productService.updateProduct(req.params.id, req.body);
+        // Optionnel : Gérer la mise à jour de l'image ici aussi si req.file existe
+        const updateData = { ...req.body };
+        if (req.file) updateData.image = req.file.path;
+
+        const product = await productService.updateProduct(req.params.id, updateData);
 
         res.status(HTTP_STATUS.OK).json({
             status: 'success',
@@ -62,21 +66,46 @@ class ProductController {
         });
     });
 
-    /** Supprime un produit du catalogue */
     delete = asyncHandler(async (req, res) => {
         await productService.deleteProduct(req.params.id);
-
         res.status(HTTP_STATUS.NO_CONTENT).send();
     });
 
-    /** Ajoute une variante (taille, couleur...) à un produit existant */
     addVariant = asyncHandler(async (req, res) => {
-        const variant = await productService.addVariantToProduct(req.params.productId, req.body);
+        const imageUrl = req.file ? req.file.path : null;
+
+        // On récupère 'size' depuis le body
+        const { size, sku, price, attributes, initialStock } = req.body;
+
+        const variantData = {
+            sku,
+            price,
+            size,
+            initialStock, // On passe la taille explicitement
+            attributes,
+            image: imageUrl
+        };
+
+        const variant = await productService.addVariantToProduct(req.params.productId, variantData);
 
         res.status(HTTP_STATUS.CREATED).json({
             status: 'success',
             data: { variant },
         });
+    });
+
+    getFilters = asyncHandler(async (_req, res) => {
+        const filters = await productService.getProductFilters();
+
+        res.status(HTTP_STATUS.OK).json({
+            status: 'success',
+            data: filters
+        });
+    });
+
+    deleteVariant = asyncHandler(async (req, res) => {
+        await productService.deleteVariant(req.params.id);
+        res.status(HTTP_STATUS.NO_CONTENT).send();
     });
 }
 

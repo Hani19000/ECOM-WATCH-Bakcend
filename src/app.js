@@ -1,63 +1,102 @@
 import * as Sentry from '@sentry/node';
 import express from 'express';
 import cookieParser from 'cookie-parser';
-import cron from 'node-cron';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-// Tes imports locaux
 import { requestLogger } from './middlewares/logger.middleware.js';
 import { errorHandler } from './middlewares/erroHandler.middleware.js';
-import { inventoryService } from './services/inventory.service.js';
 import v1Router from './routes/index.routes.js';
 import {
     helmetMiddleware,
     corsMiddleware,
-    generalLimiter,
     compressResponse,
 } from './config/security.js';
 import { healthService } from './services/health.service.js';
-
+import { logInfo } from './utils/logger.js';
+import { initializeCronJobs, shutdownCronJobs } from './jobs/index.js';
 
 const app = express();
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// ─────────────────────────────────────────────────────────────────────
+// HEALTH CHECK
+// ─────────────────────────────────────────────────────────────────────
+
 app.get('/health', async (_req, res) => {
     const { isHealthy, status } = await healthService.check();
-
     res.status(isHealthy ? 200 : 503).json(status);
 });
-// --- 1. MIDDLEWARES DE BASE ---
+
+// ─────────────────────────────────────────────────────────────────────
+// BODY PARSING
+// rawBody est conservé sur les requêtes webhook pour permettre la
+// vérification de signature HMAC Stripe côté contrôleur.
+// ─────────────────────────────────────────────────────────────────────
+
 app.use(express.json({
     verify: (req, _res, buf) => {
         if (req.originalUrl?.includes('/webhook')) {
             req.rawBody = buf;
         }
-    }
+    },
 }));
 
-// --- 2. PIPELINE DE SÉCURITÉ ET LOGS ---
+// ─────────────────────────────────────────────────────────────────────
+// PIPELINE SÉCURITÉ ET LOGS
+// ─────────────────────────────────────────────────────────────────────
+
 app.use(helmetMiddleware);
 app.use(corsMiddleware);
 app.use(cookieParser());
 app.use(compressResponse);
-app.use(generalLimiter);
 app.use(requestLogger);
 
-// --- 3. ROUTES DE L'API ---
+// ─────────────────────────────────────────────────────────────────────
+// FICHIERS STATIQUES
+// ─────────────────────────────────────────────────────────────────────
+
+app.use('/images', express.static(path.join(__dirname, 'public/images'), {
+    setHeaders: (res) => {
+        res.set('Cross-Origin-Resource-Policy', 'cross-origin');
+    },
+}));
+
+// ─────────────────────────────────────────────────────────────────────
+// ROUTES API
+// Le rate limiter général est appliqué dans index.routes.js —
+// l'appliquer ici en plus provoquerait un double comptage sur /api/v1.
+// ─────────────────────────────────────────────────────────────────────
+
 app.use('/api/v1', v1Router);
 
-app.get('/health', (_req, res) => {
-    res.status(200).json({ status: 'UP', env: process.env.NODE_ENV });
-});
+// ─────────────────────────────────────────────────────────────────────
+// GESTION DES ERREURS
+// Sentry doit être enregistré avant le handler d'erreur applicatif.
+// ─────────────────────────────────────────────────────────────────────
 
-// --- 4. GESTIONNAIRE D'ERREURS SENTRY ---
-// Indispensable APRÈS les routes, mais AVANT ton errorHandler perso
 Sentry.setupExpressErrorHandler(app);
-
-// --- 5. TON HANDLER D'ERREUR FINAL ---
 app.use(errorHandler);
 
-// Cron Jobs
-cron.schedule('0 * * * *', () => {
-    inventoryService.cleanupExpiredReservations();
+// ─────────────────────────────────────────────────────────────────────
+// CRON JOBS
+// ─────────────────────────────────────────────────────────────────────
+
+initializeCronJobs();
+
+// Arrêt propre des crons avant extinction du processus
+process.on('SIGTERM', () => {
+    logInfo('SIGTERM reçu, arrêt des crons...');
+    shutdownCronJobs();
+    process.exit(0);
+});
+
+process.on('SIGINT', () => {
+    logInfo('SIGINT reçu, arrêt des crons...');
+    shutdownCronJobs();
+    process.exit(0);
 });
 
 export default app;

@@ -4,7 +4,7 @@
  * Vérifie l'état des dépendances critiques de l'application.
  * Exposé via un endpoint dédié pour les outils de monitoring (Kubernetes, UptimeRobot...).
  */
-import { logger } from './logger.js';
+import { logError } from './logger.js';
 
 /**
  * Sonde la connexion PostgreSQL avec une requête légère.
@@ -15,9 +15,9 @@ export const checkPostgres = async (pgPool) => {
     try {
         await pgPool.query('SELECT 1');
         return { status: 'up' };
-    } catch (err) {
-        logger.error('PostgreSQL healthcheck failed', err);
-        return { status: 'down', error: err.message };
+    } catch (error) {
+        logError(error, { context: 'PostgreSQL healthcheck' });
+        return { status: 'down', error: error.message };
     }
 };
 

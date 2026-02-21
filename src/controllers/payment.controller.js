@@ -1,98 +1,175 @@
 /**
  * @module Controller/Payment
  *
- * Gère l'initialisation des sessions de paiement et la réception des webhooks.
- * Les webhooks doivent être traités rapidement (répondre 200 immédiatement)
- * pour éviter les retentatives automatiques de Stripe/PayPal.
+ * Gère les sessions de paiement Stripe/PayPal et les webhooks associés.
+ * Supporte les paiements en mode guest et authentifié.
  */
 import { paymentService } from '../services/payment.service.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
-import { logInfo } from '../utils/logger.js';
+import { AppError } from '../utils/appError.js';
+import { ENV } from '../config/environment.js';
+
+/**
+ * URL du frontend, définie une seule fois pour éviter la duplication et
+ * garantir la cohérence entre handleSuccess et handleCancel.
+ */
+const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
+
+/**
+ * Valide le format d'un Stripe Session ID pour éviter l'injection dans le HTML de redirection.
+ * Stripe génère des IDs au format cs_(test|live)_<alphanumérique>.
+ */
+const isValidStripeSessionId = (id) => /^cs_(test|live)_[a-zA-Z0-9]+$/.test(id ?? '');
 
 class PaymentController {
     /**
-     * Crée une session de paiement Stripe ou PayPal.
-     * Retourne l'URL de redirection vers la plateforme de paiement tierce.
-     * POST /api/v1/payments/create-session/:orderId
+     * Initialise une session de paiement Stripe.
+     * Accessible en mode guest (req.user undefined) et authentifié.
      */
     createCheckoutSession = asyncHandler(async (req, res) => {
         const { orderId } = req.params;
-        const { provider } = req.body;
 
-        const session = await paymentService.createSession(orderId, provider, req.user.id);
+        if (!orderId) {
+            throw new AppError('Order ID manquant', HTTP_STATUS.BAD_REQUEST);
+        }
+
+        const session = await paymentService.createSession(orderId, req.user);
 
         res.status(HTTP_STATUS.OK).json({
             status: 'success',
             data: {
                 checkoutUrl: session.url,
                 sessionId: session.id,
+                isGuestCheckout: !req.user,
             },
         });
     });
 
     /**
-     * Webhook Stripe.
-     * ATTENTION : nécessite le body "raw" (Buffer) pour valider la signature HMAC.
-     * Sans rawBody, Stripe rejettera la vérification et les paiements ne seront pas confirmés.
+     * Traite les webhooks Stripe.
+     * Route publique : l'authenticité est garantie par la signature HMAC Stripe,
+     * pas par un token JWT.
      */
     handleStripeWebhook = asyncHandler(async (req, res) => {
         const signature = req.headers['stripe-signature'];
 
+        if (!signature) {
+            throw new AppError('Signature Stripe manquante', HTTP_STATUS.BAD_REQUEST);
+        }
+
         if (!req.rawBody) {
-            logInfo('Stripe webhook reçu sans rawBody — vérifier la config express.json dans app.js');
+            throw new AppError(
+                'Configuration serveur incorrecte : rawBody manquant',
+                HTTP_STATUS.INTERNAL_SERVER_ERROR
+            );
         }
 
         await paymentService.processStripeWebhook(req.rawBody, signature);
+
         res.status(HTTP_STATUS.OK).json({ received: true });
     });
 
-    /** Webhook PayPal */
+    /**
+     * Traite les webhooks PayPal.
+     */
     handlePayPalWebhook = asyncHandler(async (req, res) => {
-        const payload = req.body;
-        const headers = req.headers;
-
-        await paymentService.processPayPalWebhook(payload, headers);
-
+        await paymentService.processPayPalWebhook(req.body, req.headers);
         res.status(HTTP_STATUS.OK).json({ status: 'success' });
     });
 
-    /** Vérifie l'état d'un paiement — utile pour le polling côté frontend */
+    /**
+     * Vérifie le statut du paiement (polling post-redirection Stripe).
+     * Accessible en mode guest et authentifié.
+     */
     checkStatus = asyncHandler(async (req, res) => {
         const { orderId } = req.params;
-        const status = await paymentService.getPaymentStatus(orderId);
+        const { email } = req.query;
+
+        if (!orderId) {
+            throw new AppError('Order ID manquant', HTTP_STATUS.BAD_REQUEST);
+        }
+
+        const paymentStatus = await paymentService.getPaymentStatus(orderId, req.user, email);
 
         res.status(HTTP_STATUS.OK).json({
             status: 'success',
-            data: { paymentStatus: status },
+            data: {
+                paymentStatus,
+                checkedAt: new Date().toISOString(),
+                isGuestCheckout: !req.user,
+            },
         });
     });
 
+    /**
+     * Page de succès après paiement (retour Stripe).
+     * Le session_id est validé avant injection dans le HTML pour prévenir le XSS.
+     */
     handleSuccess = asyncHandler(async (req, res) => {
-        // Option A : Rediriger vers ton Frontend (React/Vue/etc.)
-        // res.redirect(`${ENV.clientUrl}/checkout/success?session_id=${req.query.session_id}`);
+        const { session_id } = req.query;
 
-        // Option B : Page HTML de confirmation temporaire
+        // Validation stricte du session_id avant injection dans le HTML de redirection
+        const safeSessionId = isValidStripeSessionId(session_id) ? session_id : '';
+        const redirectUrl = `${CLIENT_URL}/checkout/success${safeSessionId ? `?session_id=${safeSessionId}` : ''}`;
+
         res.send(`
-        <div style="text-align: center; margin-top: 50px; font-family: sans-serif;">
-            <h1 style="color: #2ecc71;">✅ Paiement réussi !</h1>
-            <p>Merci pour votre commande. Nous préparons votre colis.</p>
-            <p>Vous allez être redirigé vers l'accueil dans quelques secondes...</p>
-            <script>
-                setTimeout(() => { window.location.href = 'http://localhost:5173'; }, 5000);
-            </script>
-        </div>
-    `);
+            <!DOCTYPE html>
+            <html lang="fr">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Paiement réussi - ECOM WATCH</title>
+                <style>
+                    body { font-family: sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; background: #fdfbf7; }
+                    .container { background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); text-align: center; }
+                    h1 { color: #2ecc71; margin-bottom: 1rem; }
+                    p { color: #666; margin-bottom: 2rem; }
+                    .loader { border: 3px solid #f3f3f3; border-top: 3px solid #000; border-radius: 50%; width: 20px; height: 20px; animation: spin 1s linear infinite; margin: 0 auto; }
+                    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <h1>Paiement Validé</h1>
+                    <p>Votre commande est confirmée. Redirection en cours...</p>
+                    <div class="loader"></div>
+                </div>
+                <script>
+                    setTimeout(() => { window.location.href = '${redirectUrl}'; }, 2000);
+                </script>
+            </body>
+            </html>
+        `);
     });
 
-    handleCancel = asyncHandler(async (req, res) => {
+    /**
+     * Page d'annulation après abandon de paiement (retour Stripe).
+     */
+    handleCancel = asyncHandler(async (_req, res) => {
         res.send(`
-        <div style="text-align: center; margin-top: 50px; font-family: sans-serif;">
-            <h1 style="color: #e74c3c;">❌ Paiement annulé</h1>
-            <p>Votre commande n'a pas été facturée.</p>
-            <a href="http://localhost:3000/api/v1/orders">Retourner à mes commandes</a>
-        </div>
-    `);
+            <!DOCTYPE html>
+            <html lang="fr">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Paiement annulé - ECOM WATCH</title>
+                <style>
+                    body { font-family: sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; background: #fdfbf7; }
+                    .container { background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); text-align: center; }
+                    h1 { color: #e74c3c; margin-bottom: 1rem; }
+                    a { color: #000; text-decoration: underline; }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <h1>Paiement annulé</h1>
+                    <p>Aucun débit n'a été effectué.</p>
+                    <a href="${CLIENT_URL}/checkout">Retourner au panier</a>
+                </div>
+            </body>
+            </html>
+        `);
     });
 }
 

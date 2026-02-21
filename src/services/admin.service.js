@@ -19,10 +19,11 @@ class AdminService {
      * pour éviter d'attendre chaque résultat séquentiellement.
      */
     async getDashboardStats() {
-        const [userCount, orderStats, lowStockCount] = await Promise.all([
+        const [userCount, orderStats, lowStockCount, productCount] = await Promise.all([
             usersRepo.count(),
             ordersRepo.getGlobalStats(),
             productsRepo.countLowStock(5),
+            productsRepo.count(),
         ]);
 
         return {
@@ -39,8 +40,29 @@ class AdminService {
             inventory: {
                 alerts: lowStockCount,
             },
+            // NOUVEAU : On expose le total pour le frontend
+            products: {
+                total: productCount,
+            },
             timestamp: new Date(),
         };
+    }
+
+    /**
+     * Historique des ventes journalières pour le graphique du dashboard.
+     * Délègue au repo qui agrège en SQL — aucun calcul applicatif ici.
+     *
+     * @param {number} days - Fenêtre temporelle en jours (défaut : 30)
+     * @returns {Promise<Array<{ date: string, revenue: string }>>}
+     */
+    async getSalesHistory(days = 30) {
+        const parsedDays = parseInt(days, 10);
+
+        if (isNaN(parsedDays) || parsedDays < 1 || parsedDays > 365) {
+            throw new AppError('Le paramètre days doit être compris entre 1 et 365', HTTP_STATUS.BAD_REQUEST);
+        }
+
+        return await ordersRepo.getDailySalesHistory(parsedDays);
     }
 
     async getSalesReport(startDate, endDate) {

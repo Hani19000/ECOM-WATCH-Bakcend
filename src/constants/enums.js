@@ -16,9 +16,11 @@ export const USER_ROLES = Object.freeze({
 export const ORDER_STATUS = Object.freeze({
     PENDING: 'PENDING',
     PAID: 'PAID',
+    PROCESSING: 'PROCESSING',
     SHIPPED: 'SHIPPED',
     DELIVERED: 'DELIVERED',
     CANCELLED: 'CANCELLED',
+    REFUNDED: 'REFUNDED',
 });
 
 /** Correspond à payment_status_enum en base */
@@ -34,6 +36,11 @@ export const PRODUCT_STATUS = Object.freeze({
     ACTIVE: 'ACTIVE',
     ARCHIVED: 'ARCHIVED',
 });
+
+export const USER_STATUS = {
+    ACTIVE: 'ACTIVE',
+    BLOCKED: 'BLOCKED'
+};
 
 /**
  * Vérifie si une valeur appartient à un enum donné.

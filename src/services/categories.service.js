@@ -1,91 +1,89 @@
+/**
+ * @module Service/Category
+ *
+ * Gère la logique métier des catégories produit.
+ * Les catégories sont mises en cache 24h car elles changent rarement.
+ */
 import { categoriesRepo } from '../repositories/categories.repo.js';
+import { cacheService } from './cache.service.js';
 import { AppError } from '../utils/appError.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
 
 class CategoryService {
-    /**
-     * Liste toutes les catégories disponibles pour le front-end
-     */
-    async getAllCategories() {
-        return await categoriesRepo.list();
+    constructor() {
+        if (CategoryService.instance) return CategoryService.instance;
+        CategoryService.instance = this;
+        Object.freeze(this);
     }
 
-    /**
-     * Crée une catégorie avec validation d'unicité sur le slug
-     * @param {Object} categoryData - { name, slug }
-     */
-    async createCategory({ name, slug }) {
-        // 1. Normalisation préventive (ex: suppression espaces inutiles)
-        const sanitizedSlug = slug.trim().toLowerCase();
+    #getCacheKey(key) {
+        return `categories:${key}`;
+    }
 
-        // 2. Vérification d'existence (Règle métier : pas de slug en double)
+    async getAllCategories() {
+        const cacheKey = this.#getCacheKey('all');
+        const cached = await cacheService.get(cacheKey);
+        if (cached) return cached;
+
+        const categories = await categoriesRepo.list();
+        await cacheService.set(cacheKey, categories, 86400);
+        return categories;
+    }
+
+    async createCategory({ name, slug }) {
+        if (!name || name.trim().length < 2 || name.trim().length > 50) {
+            throw new AppError('Nom de catégorie invalide (2-50 caractères).', HTTP_STATUS.BAD_REQUEST);
+        }
+
+        const sanitizedSlug = slug.trim().toLowerCase();
+        const slugRegex = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+        if (!slugRegex.test(sanitizedSlug)) {
+            throw new AppError('Format du slug invalide.', HTTP_STATUS.BAD_REQUEST);
+        }
+
         const existingCategory = await categoriesRepo.findBySlug(sanitizedSlug);
         if (existingCategory) {
-            throw new AppError(
-                `La catégorie avec le slug '${sanitizedSlug}' existe déjà.`,
-                HTTP_STATUS.CONFLICT
-            );
+            throw new AppError(`Le slug '${sanitizedSlug}' existe déjà.`, HTTP_STATUS.CONFLICT);
         }
 
-        // 3. Persistance
-        const newCategory = await categoriesRepo.create({ name, slug: sanitizedSlug });
-
-        // Double sécurité si la DB renvoie null malgré le check précédent (ex: race condition)
-        if (!newCategory) {
-            throw new AppError('Erreur lors de la création de la catégorie.', HTTP_STATUS.INTERNAL_SERVER_ERROR);
-        }
-
+        const newCategory = await categoriesRepo.create({
+            name: name.trim(),
+            slug: sanitizedSlug,
+        });
+        await cacheService.delete(this.#getCacheKey('all'));
         return newCategory;
     }
 
-    /**
-     * Attache une liste de catégories à un produit
-     * Utilise Promise.all pour paralléliser les insertions (Performance)
-     * @param {string} productId - UUID du produit
-     * @param {Array<string>} categoryIds - Tableau d'UUIDs
-     */
     async assignCategoriesToProduct(productId, categoryIds) {
-        // Guard clause : on ne fait rien si la liste est vide ou invalide
-        if (!Array.isArray(categoryIds) || categoryIds.length === 0) {
-            return;
-        }
+        if (!Array.isArray(categoryIds) || categoryIds.length === 0) return;
 
-        // Création des promesses d'insertion (Non-bloquant séquentiellement)
-        const linkPromises = categoryIds.map(categoryId =>
-            categoriesRepo.linkProductToCategory(productId, categoryId)
+        await Promise.all(
+            categoryIds.map((catId) => categoriesRepo.linkProductToCategory(productId, catId))
         );
-
-        // Attente de la complétion de toutes les liaisons
-        await Promise.all(linkPromises);
-    }
-
-    /**
-     * Supprime une catégorie uniquement si elle n'est pas liée à des produits.
-     * C'est une règle de sécurité métier pour éviter les données orphelines.
-     */
-    async deleteCategory(id) {
-        // Logique de sécurité pour vérifier si la catégorie est utilisée
-        const products = await categoriesRepo.listByProductId(id);
-        if (products && products.length > 0) {
-            throw new AppError(
-                'Impossible de supprimer : cette catégorie est liée à des produits.',
-                HTTP_STATUS.CONFLICT
-            );
-        }
-
-        const success = await categoriesRepo.delete(id);
-        if (!success) {
-            throw new AppError('Catégorie non trouvée', HTTP_STATUS.NOT_FOUND);
-        }
-        return true;
+        // Le cache produit est invalidé car ses catégories ont changé
+        await cacheService.delete(`product:details:${productId}`);
     }
 
     async updateCategory(id, data) {
         const updated = await categoriesRepo.update(id, data);
-        if (!updated) {
-            throw new AppError('Catégorie non trouvée', HTTP_STATUS.NOT_FOUND);
-        }
+        if (!updated) throw new AppError('Catégorie introuvable', HTTP_STATUS.NOT_FOUND);
+
+        await cacheService.delete(this.#getCacheKey('all'));
         return updated;
+    }
+
+    async deleteCategory(id) {
+        const linkedProducts = await categoriesRepo.listByProductId(id);
+        if (linkedProducts?.length > 0) {
+            throw new AppError('Action impossible : catégorie utilisée.', HTTP_STATUS.CONFLICT);
+        }
+
+        const success = await categoriesRepo.delete(id);
+        if (!success) throw new AppError('Catégorie introuvable', HTTP_STATUS.NOT_FOUND);
+
+        await cacheService.delete(this.#getCacheKey('all'));
+        return true;
     }
 }
 

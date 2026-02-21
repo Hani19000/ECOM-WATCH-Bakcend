@@ -5,12 +5,17 @@
  * et le nettoyage des réservations expirées.
  */
 import { inventoryRepo, productsRepo, ordersRepo } from '../repositories/index.js';
-import { AppError } from '../utils/appError.js';
+import { AppError, BusinessError } from '../utils/appError.js';
+import { cacheService } from './cache.service.js';
+import { logError } from '../utils/logger.js';
+import { pgPool } from '../config/database.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
 
 class InventoryService {
     // Seuil centralisé ici pour qu'un seul changement impacte alertes et dashboard.
     #LOW_STOCK_THRESHOLD = 5;
+    #CACHE_PREFIX = 'stock:variant:';
+    #CACHE_TTL = 3600;
 
     constructor() {
         if (InventoryService.instance) return InventoryService.instance;
@@ -18,26 +23,58 @@ class InventoryService {
         Object.freeze(this);
     }
 
-    async getStockLevel(variantId) {
-        const inventory = await inventoryRepo.findByVariantId(variantId);
-        if (!inventory) throw new AppError('Inventaire introuvable', HTTP_STATUS.NOT_FOUND);
-
+    async getAllInventory(params) {
+        const { items, total } = await inventoryRepo.findAll(params);
         return {
-            ...inventory,
-            isLowStock: inventory.availableStock <= this.#LOW_STOCK_THRESHOLD,
+            items,
+            pagination: {
+                page: parseInt(params.page, 10) || 1,
+                limit: parseInt(params.limit, 10) || 15,
+                total,
+                totalPages: Math.ceil(total / (params.limit || 15)),
+            }
         };
     }
 
+    async getStockLevel(variantId) {
+        const cacheKey = `${this.#CACHE_PREFIX}${variantId}`;
+
+        try {
+            const cached = await cacheService.get(cacheKey);
+            if (cached) return cached;
+        } catch (error) {
+            // Si Redis est indisponible, on continue vers la DB — résilience prioritaire.
+            logError(error, { context: 'InventoryService getStockLevel', variantId });
+        }
+
+        const inventory = await inventoryRepo.findByVariantId(variantId);
+        if (!inventory) throw new AppError('Inventaire introuvable', HTTP_STATUS.NOT_FOUND);
+
+        const result = {
+            ...inventory,
+            isLowStock: inventory.availableStock <= this.#LOW_STOCK_THRESHOLD,
+        };
+
+        cacheService.set(cacheKey, result, this.#CACHE_TTL).catch(() => { });
+        return result;
+    }
+
+    async #invalidateCache(variantId) {
+        await cacheService.delete(`${this.#CACHE_PREFIX}${variantId}`).catch(() => { });
+    }
+
     async adjustStock(variantId, quantity, reason = 'ADJUSTMENT') {
-        const variant = await productsRepo.findVariantById(variantId);
-        if (!variant) throw new AppError('Variante introuvable', HTTP_STATUS.NOT_FOUND);
-
         const currentStock = await inventoryRepo.findByVariantId(variantId);
-        const newTotal = (currentStock?.availableStock || 0) + quantity;
+        if (!currentStock) throw new AppError('Variante introuvable', HTTP_STATUS.NOT_FOUND);
 
-        if (newTotal < 0) throw new AppError('Stock insuffisant', HTTP_STATUS.BAD_REQUEST);
+        const newTotal = currentStock.availableStock + quantity;
+        if (newTotal < 0) throw new BusinessError('Le stock total ne peut pas être négatif');
 
-        return await inventoryRepo.upsert({ variantId, availableStock: newTotal });
+        return await inventoryRepo.upsert({
+            variantId,
+            availableStock: newTotal,
+            reservedStock: currentStock.reservedStock,
+        });
     }
 
     /**
@@ -60,45 +97,64 @@ class InventoryService {
     }
 
     async reserveStock(variantId, quantity, client = null) {
+        // Vérification en DB (source de vérité) avant toute mutation de stock
         const inventory = await inventoryRepo.findByVariantId(variantId);
         if (!inventory || inventory.availableStock < quantity) {
             throw new AppError('Stock insuffisant', HTTP_STATUS.CONFLICT);
         }
 
-        return await inventoryRepo.reserve(variantId, quantity, client);
+        const result = await inventoryRepo.reserve(variantId, quantity, client);
+        await this.#invalidateCache(variantId);
+        return result;
     }
 
     /**
      * Libère le stock réservé par des commandes PENDING trop anciennes.
      * Promise.allSettled garantit que l'échec sur une commande n'empêche pas
-     * le traitement des autres (une DB lente ne bloque pas tout le cron).
+     * le traitement des autres.
      */
     async cleanupExpiredReservations() {
-        const EXPIRATION_HOURS = 24;
-        const expiredOrders = await ordersRepo.findExpiredPendingOrders(EXPIRATION_HOURS);
+        const EXPIRATION_MINUTES = 24 * 60;
+        const expiredOrders = await ordersRepo.findExpiredPendingOrders(EXPIRATION_MINUTES);
 
-        if (!expiredOrders?.length) return;
+        if (!expiredOrders?.length) return { processed: 0 };
 
-        await Promise.allSettled(
-            expiredOrders.map(async (order) => {
-                const items = order.items?.filter((item) => item !== null) || [];
-
+        const client = await pgPool.connect();
+        try {
+            await client.query('BEGIN');
+            for (const order of expiredOrders) {
+                const items = await ordersRepo.listItems(order.id);
                 for (const item of items) {
-                    await inventoryRepo.release(item.variantId, item.quantity);
+                    await inventoryRepo.release(item.variantId, item.quantity, client);
+                    await this.#invalidateCache(item.variantId);
                 }
-
-                await ordersRepo.setStatus(order.id, 'CANCELLED');
-            })
-        );
+                await client.query(
+                    "UPDATE orders SET status = 'CANCELLED', updated_at = NOW() WHERE id = $1",
+                    [order.id]
+                );
+            }
+            await client.query('COMMIT');
+            return { processed: expiredOrders.length };
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
     }
 
     async restockVariant(variantId, quantity) {
         if (quantity <= 0) {
-            throw new AppError('La quantité à ajouter doit être supérieure à 0', HTTP_STATUS.BAD_REQUEST);
+            throw new AppError(
+                'La quantité à ajouter doit être supérieure à 0',
+                HTTP_STATUS.BAD_REQUEST
+            );
         }
 
         const updatedStock = await inventoryRepo.addStock(variantId, quantity);
-        if (!updatedStock) throw new AppError("Variante introuvable dans l'inventaire", HTTP_STATUS.NOT_FOUND);
+        if (!updatedStock) {
+            throw new AppError("Variante introuvable dans l'inventaire", HTTP_STATUS.NOT_FOUND);
+        }
 
         return updatedStock;
     }

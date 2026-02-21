@@ -2,7 +2,8 @@
  * @module Config/Database
  *
  * Initialisation et gestion du pool de connexions PostgreSQL.
- * Utiliser un pool plutôt que des connexions individuelles réduit la latence et évite de saturer les connexions max autorisées par PostgreSQL.
+ * Utiliser un pool plutôt que des connexions individuelles réduit la latence
+ * et évite de saturer les connexions max autorisées par PostgreSQL.
  */
 import pkg from 'pg';
 const { Pool } = pkg;
@@ -10,8 +11,8 @@ import { ENV } from './environment.js';
 import { logInfo, logError } from '../utils/logger.js';
 
 /**
- * Configuration centralisée du pool.
- * Le SSL est requis sur les hébergeurs comme Render/Heroku qui rejettent les connexions non chiffrées en production.
+ * Le SSL est requis sur les hébergeurs comme Render/Heroku
+ * qui rejettent les connexions non chiffrées en production.
  */
 const poolConfig = {
     user: ENV.database.postgres.user,
@@ -35,12 +36,12 @@ export const pgPool = new Pool(poolConfig);
  */
 export const connectPostgres = async () => {
     try {
-        console.log(`Attempting to connect to PG at ${poolConfig.host}:${poolConfig.port} as user ${poolConfig.user}`);
+        logInfo(`Connexion PostgreSQL → ${poolConfig.host}:${poolConfig.port} (user: ${poolConfig.user})`);
         const client = await pgPool.connect();
-        logInfo('PostgreSQL connected successfully (Pool ready)');
+        logInfo('PostgreSQL connecté avec succès (Pool ready)');
         client.release();
     } catch (error) {
-        logError('PostgreSQL connection error:', error);
+        logError(error, { context: 'PostgreSQL connection error' });
         throw error;
     }
 };
@@ -52,8 +53,8 @@ export const connectPostgres = async () => {
 export const closePostgres = async () => {
     try {
         await pgPool.end();
-        logInfo('PostgreSQL pool closed');
+        logInfo('PostgreSQL pool fermé');
     } catch (error) {
-        logError('Error while closing PostgreSQL pool:', error);
+        logError(error, { context: 'Error closing PostgreSQL pool' });
     }
 };

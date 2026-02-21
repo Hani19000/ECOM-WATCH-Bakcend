@@ -27,4 +27,4 @@ Sentry.init({
     profilesSampleRate: 1.0,
 });
 
-console.log("✅ Sentry : Initialisation du SDK terminée");
+console.log("Sentry : Initialisation du SDK terminée");

@@ -50,12 +50,15 @@ export const inventoryRepo = {
     validateQuantity(quantity, 'quantity');
 
     const { rows } = await client.query(
-      `UPDATE inventory
-             SET available_stock = available_stock - $2,
-                 reserved_stock  = reserved_stock + $2,
-                 updated_at      = NOW()
-             WHERE variant_id = $1 AND available_stock >= $2
-             RETURNING *`,
+      `UPDATE inventory i
+       SET available_stock = i.available_stock - $2,
+           reserved_stock  = i.reserved_stock + $2,
+           updated_at      = NOW()
+       FROM product_variants pv -- Jointure pour récupérer le prix
+       WHERE i.variant_id = pv.id 
+         AND i.variant_id = $1 
+         AND i.available_stock >= $2
+       RETURNING i.*, pv.price`, // On retourne le prix réel
       [variantId, quantity]
     );
 
@@ -121,6 +124,53 @@ export const inventoryRepo = {
     }
 
     return mapRow(rows[0]);
+  },
+
+  /**
+     * Liste tout l'inventaire pour le tableau d'administration avec filtres et pagination.
+     */
+  async findAll({ page = 1, limit = 15, search = '' }) {
+    const offset = (page - 1) * limit;
+    const values = [];
+    let whereClause = 'WHERE 1=1';
+
+    if (search) {
+      values.push(`%${search}%`);
+      whereClause += ` AND (pv.sku ILIKE $${values.length} OR p.name ILIKE $${values.length})`;
+    }
+
+    values.push(limit, offset);
+
+    const query = `
+      SELECT
+        i.*,
+        pv.sku,
+        pv.price,
+        p.name AS product_name,
+        p.id AS product_id
+      FROM inventory i
+      JOIN product_variants pv ON i.variant_id = pv.id
+      JOIN products p ON pv.product_id = p.id
+      ${whereClause}
+      ORDER BY p.name ASC, pv.sku ASC
+      LIMIT $${values.length - 1} OFFSET $${values.length}
+    `;
+
+    const countQuery = `
+      SELECT COUNT(*) 
+      FROM inventory i
+      JOIN product_variants pv ON i.variant_id = pv.id
+      JOIN products p ON pv.product_id = p.id
+      ${whereClause}
+    `;
+
+    const { rows } = await pgPool.query(query, values);
+    const { rows: countRows } = await pgPool.query(countQuery, search ? [`%${search}%`] : []);
+
+    return {
+      items: mapRows(rows),
+      total: parseInt(countRows[0].count, 10),
+    };
   },
 
   /**
