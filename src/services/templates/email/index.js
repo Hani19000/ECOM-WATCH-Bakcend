@@ -368,11 +368,6 @@ export const emailTemplates = {
             <a href="${process.env.CLIENT_URL}/shop" class="button">
                 Découvrir la boutique
             </a>
-
-            <p style="margin-top: 40px; padding: 20px; background-color: #fff3cd; border-radius: 8px;">
-                🎁 <strong>Cadeau de bienvenue :</strong><br>
-                Profitez de <strong>10% de réduction</strong> sur votre première commande avec le code <strong>WELCOME10</strong>
-            </p>
         `;
 
         return {
