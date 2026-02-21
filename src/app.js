@@ -17,6 +17,7 @@ import { logInfo } from './utils/logger.js';
 import { initializeCronJobs, shutdownCronJobs } from './jobs/index.js';
 
 const app = express();
+app.set('trust proxy', 1);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

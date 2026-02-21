@@ -2,8 +2,7 @@
  * @module Config/Database
  *
  * Initialisation et gestion du pool de connexions PostgreSQL.
- * Utiliser un pool plutôt que des connexions individuelles réduit la latence
- * et évite de saturer les connexions max autorisées par PostgreSQL.
+ * Adapté pour supporter les URLs de connexion Cloud (Neon) et les paramètres classiques.
  */
 import pkg from 'pg';
 const { Pool } = pkg;
@@ -11,32 +10,48 @@ import { ENV } from './environment.js';
 import { logInfo, logError } from '../utils/logger.js';
 
 /**
- * Le SSL est requis sur les hébergeurs comme Render/Heroku
- * qui rejettent les connexions non chiffrées en production.
+ * Configuration dynamique du Pool.
+ * Priorise l'URL complète (DATABASE_URL) car elle contient souvent des paramètres 
+ * spécifiques au pooler (comme chez Neon).
  */
-const poolConfig = {
-    user: ENV.database.postgres.user,
-    password: ENV.database.postgres.password,
-    host: ENV.database.postgres.host,
-    port: ENV.database.postgres.port,
-    database: ENV.database.postgres.database,
+const poolConfig = ENV.database.postgres.url
+    ? {
+        connectionString: ENV.database.postgres.url,
+        ssl: { rejectUnauthorized: false }, // Requis par Neon et Render
+    }
+    : {
+        user: ENV.database.postgres.user,
+        password: ENV.database.postgres.password,
+        host: ENV.database.postgres.host,
+        port: ENV.database.postgres.port,
+        database: ENV.database.postgres.database,
+        // SSL conditionnel pour le développement local classique
+        ssl: ENV.server.isProduction
+            ? { require: true, rejectUnauthorized: false }
+            : false,
+    };
+
+// Options de performance du pool communes aux deux modes
+const finalConfig = {
+    ...poolConfig,
     max: 20,
     idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 2000,
-    ssl: ENV.server.nodeEnv === 'production'
-        ? { require: true, rejectUnauthorized: false }
-        : false,
+    connectionTimeoutMillis: 5000, // Augmenté pour éviter les timeouts au démarrage
 };
 
-export const pgPool = new Pool(poolConfig);
+export const pgPool = new Pool(finalConfig);
 
 /**
- * Valide la connexion au démarrage en empruntant un client du pool.
- * Échouer tôt (fail-fast) évite de démarrer un serveur inutilisable.
+ * Valide la connexion au démarrage (Fail-fast).
  */
 export const connectPostgres = async () => {
     try {
-        logInfo(`Connexion PostgreSQL → ${poolConfig.host}:${poolConfig.port} (user: ${poolConfig.user})`);
+        const connectionTarget = ENV.database.postgres.url
+            ? 'Neon Cloud (URL)'
+            : `${finalConfig.host}:${finalConfig.port}`;
+
+        logInfo(`Tentative de connexion PostgreSQL → ${connectionTarget}`);
+
         const client = await pgPool.connect();
         logInfo('PostgreSQL connecté avec succès (Pool ready)');
         client.release();
@@ -47,8 +62,7 @@ export const connectPostgres = async () => {
 };
 
 /**
- * Ferme proprement toutes les connexions du pool à l'arrêt du serveur.
- * Nécessaire pour éviter les connexions fantômes côté PostgreSQL.
+ * Fermeture propre du pool.
  */
 export const closePostgres = async () => {
     try {

@@ -63,8 +63,8 @@ export const helmetMiddleware = helmet({
             imgSrc: ["'self'", 'data:', 'blob:', 'https://res.cloudinary.com'],
             connectSrc: [
                 "'self'",
-                'https://fburger-420b.onrender.com',
-                'https://o4510681965199360.ingest.de.sentry.io', // DSN Sentry
+                'https://votre-app-h1watch.onrender.com',
+                'https://o4510681965199360.ingest.de.sentry.io',
             ],
             fontSrc: ["'self'", 'data:'],
             objectSrc: ["'none'"],

@@ -10,18 +10,9 @@ import 'dotenv/config';
 /** Variables obligatoires sans lesquelles l'application ne peut pas démarrer */
 const requiredEnv = [
     'PORT',
-    'POSTGRES_HOST',
-    'POSTGRES_PORT',
-    'POSTGRES_USER',
-    'POSTGRES_PASSWORD',
-    'POSTGRES_DB',
     'JWT_ACCESS_SECRET',
     'JWT_REFRESH_SECRET',
     'SENTRY_DSN',
-    // 'MAIL_HOST',
-    // 'MAIL_PORT',
-    // 'MAIL_USER',
-    // 'MAIL_PASS',
     'REDIS_HOST',
     'REDIS_PORT',
     'CLIENT_URL',
@@ -29,10 +20,21 @@ const requiredEnv = [
     'STRIPE_WEBHOOK_SECRET'
 ];
 
+// On vérifie soit la DATABASE_URL (Cloud), soit l'ensemble des paramètres Host/User/Pass (Local)
+const hasPostgresConfig = process.env.DATABASE_URL || (
+    process.env.POSTGRES_HOST &&
+    process.env.POSTGRES_USER &&
+    process.env.POSTGRES_PASSWORD &&
+    process.env.POSTGRES_DB
+);
+
 const missingEnv = requiredEnv.filter((key) => !process.env[key]);
 
-if (missingEnv.length > 0) {
-    throw new Error(`Missing environment variables: ${missingEnv.join(', ')}`);
+if (missingEnv.length > 0 || !hasPostgresConfig) {
+    const errorMsg = missingEnv.length > 0
+        ? `Missing environment variables: ${missingEnv.join(', ')}`
+        : 'Missing PostgreSQL configuration (DATABASE_URL or individual POSTGRES_* variables)';
+    throw new Error(errorMsg);
 }
 
 export const ENV = Object.freeze({
@@ -43,6 +45,7 @@ export const ENV = Object.freeze({
     },
     database: {
         postgres: {
+            url: process.env.DATABASE_URL,
             host: process.env.POSTGRES_HOST,
             port: Number(process.env.POSTGRES_PORT),
             user: process.env.POSTGRES_USER,

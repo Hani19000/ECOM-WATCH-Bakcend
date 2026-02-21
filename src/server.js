@@ -4,8 +4,8 @@ import { connectPostgres } from './config/database.js';
 import { logInfo, logError } from './utils/logger.js';
 
 /**
- * uncaughtException couvre les throw synchrones non attrapés.
- * On sort immédiatement car l'état de l'application est indéterminé.
+ * Gestion des erreurs fatales synchrones.
+ * On loggue et on quitte proprement car l'état de l'app est instable.
  */
 process.on('uncaughtException', (err) => {
     logError(err, { event: 'uncaughtException' });
@@ -13,28 +13,41 @@ process.on('uncaughtException', (err) => {
 });
 
 const startServer = async () => {
+    // 1. On définit le port (Render fournit process.env.PORT)
+    const port = ENV.server.port || 3000;
+
+    // 2. On démarre l'écoute HTTP immédiatement. 
+    // Cela permet à Render de valider le déploiement même si la DB met du temps.
+    const server = app.listen(port, '0.0.0.0', () => {
+        logInfo(`Serveur en ligne [${ENV.server.nodeEnv}] sur le port ${port}`);
+    });
+
     try {
-        // Initialise et valide le pool PostgreSQL (fail-fast)
+        // 3. Connexion à la base de données après le démarrage du serveur
+        logInfo('Tentative de connexion à PostgreSQL...');
         await connectPostgres();
-
-        const port = ENV.server.port || 3000;
-        const server = app.listen(port, () => {
-            logInfo(`Serveur en ligne [${ENV.server.nodeEnv}] sur le port ${port}`);
-        });
-
-        /**
-         * unhandledRejection couvre les promesses rejetées sans .catch().
-         * Fermeture gracieuse pour laisser les requêtes en cours se terminer.
-         */
-        process.on('unhandledRejection', (err) => {
-            logError(err, { event: 'unhandledRejection' });
-            server.close(() => process.exit(1));
-        });
+        logInfo('Connexion PostgreSQL établie avec succès');
 
     } catch (error) {
-        logError(error, { step: 'server_startup' });
-        process.exit(1);
+        // Si la DB échoue, on loggue l'erreur. 
+        // En prod, on peut choisir de crash (process.exit) ou de continuer en mode dégradé.
+        logError(error, { step: 'database_connection_startup' });
+
+        // Si la DB est critique au démarrage
+        // server.close(() => process.exit(1));
     }
+
+    /**
+     * Gestion des promesses rejetées non capturées.
+     */
+    process.on('unhandledRejection', (err) => {
+        logError(err, { event: 'unhandledRejection' });
+        // On ferme le serveur proprement avant de quitter
+        server.close(() => {
+            logInfo('Serveur fermé suite à unhandledRejection');
+            process.exit(1);
+        });
+    });
 };
 
 startServer();
