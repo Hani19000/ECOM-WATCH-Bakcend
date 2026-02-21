@@ -11,14 +11,12 @@ import { authService } from '../services/auth.service.js';
 import { passwordResetService } from '../services/passwordreset.service.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
-import { ENV } from '../config/environment.js';
 
-const isProduction = ENV.server.isProduction;
 
 const REFRESH_TOKEN_COOKIE_OPTIONS = {
     httpOnly: true,
-    secure: isProduction,
-    sameSite: isProduction ? 'strict' : 'lax',
+    secure: true,
+    sameSite: 'none',
     maxAge: 7 * 24 * 60 * 60 * 1000,
 };
 
