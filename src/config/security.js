@@ -35,9 +35,10 @@ const getClientIp = (req) => {
  */
 const getAllowedOrigins = () => {
     if (ENV.server.nodeEnv === 'production') {
-        return ['https://fburger.vercel.app'];
+        return ['https://ecom-watch-frontend.vercel.app'];
     }
     return [
+        'https://ecom-watch-frontend.vercel.app',
         'http://localhost:5173',
         'http://localhost:5174',
         'http://localhost:3000',
@@ -64,7 +65,6 @@ export const helmetMiddleware = helmet({
             connectSrc: [
                 "'self'",
                 'https://ecom-watch-frontend.vercel.app',
-                'https://votre-app-h1watch.onrender.com',
                 'https://o4510681965199360.ingest.de.sentry.io',
             ],
             fontSrc: ["'self'", 'data:'],
