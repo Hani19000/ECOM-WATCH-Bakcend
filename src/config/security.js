@@ -35,14 +35,11 @@ const getClientIp = (req) => {
  */
 const getAllowedOrigins = () => {
     if (ENV.server.nodeEnv === 'production') {
-        return ['https://ecomwatch.vercel.app'];
+        return [
+            'https://ecomwatch.vercel.app',
+            /\.vercel\.app$/
+        ];
     }
-    return [
-        'https://ecomwatch.vercel.app',
-        'http://localhost:5173',
-        'http://localhost:5174',
-        'http://localhost:3000',
-    ];
 };
 
 const origins = process.env.CORS_ORIGINS?.split(',') || getAllowedOrigins();
@@ -65,6 +62,7 @@ export const helmetMiddleware = helmet({
             connectSrc: [
                 "'self'",
                 'https://ecomwatch.vercel.app',
+                'https://ecom-watch.onrender.com',
                 'https://o4510681965199360.ingest.de.sentry.io',
             ],
             fontSrc: ["'self'", 'data:'],
