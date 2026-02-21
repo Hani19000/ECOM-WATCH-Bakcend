@@ -48,6 +48,8 @@ class AuthController {
             data: {
                 user: result.user,
                 accessToken: result.accessToken,
+                claimedOrders: result.claimedOrders || 0,
+                claimedOrderNumbers: result.claimedOrderNumbers || [],
             },
         });
     });

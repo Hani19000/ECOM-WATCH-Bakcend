@@ -149,8 +149,25 @@ class AuthService {
         const roles = await rolesRepo.listUserRoles(user.id);
         const userWithRoles = { ...user, roles: roles.map((r) => r.name) };
 
-        // userWithRoles.roles est maintenant transmis jusqu'au return de #createAuthSession
-        return await this.#createAuthSession(userWithRoles);
+        const claimResult = await orderService.autoClaimGuestOrders(
+            user.id,
+            email.trim().toLowerCase()
+        );
+
+        if (claimResult.claimed > 0) {
+            logInfo(`${claimResult.claimed} commande(s) rattachée(s) à ${user.id} lors de la connexion`);
+        } else if (claimResult.error) {
+            logError(new Error(claimResult.error), { context: 'auto-claim login', userId: user.id });
+        }
+
+        // Création de la session
+        const session = await this.#createAuthSession(userWithRoles);
+
+        return {
+            ...session,
+            claimedOrders: claimResult.claimed || 0,
+            claimedOrderNumbers: claimResult.claimedOrderNumbers || [],
+        };
     }
 
     /**

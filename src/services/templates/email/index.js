@@ -137,7 +137,9 @@ export const emailTemplates = {
 
             ${orderData.shippingAddress ? `
                 <p><strong>Adresse de livraison :</strong><br>
-                ${orderData.shippingAddress}</p>
+                ${orderData.shippingAddress.address || orderData.shippingAddress.street || ''}<br>
+                ${orderData.shippingAddress.zipCode || orderData.shippingAddress.postalCode || ''} ${orderData.shippingAddress.city || ''}<br>
+                ${orderData.shippingAddress.country || 'France'}</p>
             ` : ''}
 
             <p>Nous préparons votre commande avec soin. Vous recevrez un email de confirmation dès que votre colis sera expédié.</p>
