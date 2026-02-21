@@ -13,8 +13,8 @@ const requiredEnv = [
     'JWT_ACCESS_SECRET',
     'JWT_REFRESH_SECRET',
     'SENTRY_DSN',
-    'REDIS_HOST',
-    'REDIS_PORT',
+    // 'REDIS_HOST',
+    // 'REDIS_PORT',
     'CLIENT_URL',
     'STRIPE_SECRET_KEY',
     'STRIPE_WEBHOOK_SECRET'
