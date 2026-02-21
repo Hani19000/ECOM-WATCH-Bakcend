@@ -282,7 +282,15 @@ class PaymentService {
             const customerEmail = session.customer_details?.email || session.customer_email;
             if (customerEmail) await this._sendGuestOrderConfirmation(customerEmail, order);
         } else if (order.userId) {
-            await notificationService.notifyOrderPaid(order.userId, order);
+            // CORRECTION : On récupère l'objet utilisateur pour obtenir son email
+            const user = await usersRepo.findById(order.userId);
+
+            if (user && user.email) {
+                // On passe l'email et non l'ID
+                await notificationService.notifyOrderPaid(user.email, order);
+            } else {
+                logError(new Error('Email introuvable pour la notification utilisateur'), { orderId, userId: order.userId });
+            }
         }
     }
 }
