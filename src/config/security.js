@@ -64,7 +64,7 @@ export const helmetMiddleware = helmet({
             imgSrc: ["'self'", 'data:', 'blob:', 'https://res.cloudinary.com'],
             connectSrc: [
                 "'self'",
-                'https://ecomwatch.vercel.app/',
+                'https://ecomwatch.vercel.app',
                 'https://o4510681965199360.ingest.de.sentry.io',
             ],
             fontSrc: ["'self'", 'data:'],
