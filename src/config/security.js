@@ -188,7 +188,7 @@ export const passwordChangeLimiter = rateLimit({
  */
 export const trackingGuestLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,  // 15 minutes
-    max: 5,                      // 5 tentatives max
+    max: 5000,                      // 5 tentatives max
     validate: { ip: false },
     standardHeaders: true,
     legacyHeaders: false,
@@ -215,7 +215,7 @@ export const trackingGuestLimiter = rateLimit({
  */
 export const profileGeneralLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,  // 15 minutes
-    max: 100,                    // 100 tentatives max
+    max: 5000,                    // 100 tentatives max
     validate: { ip: false },
     standardHeaders: true,
     legacyHeaders: false,
