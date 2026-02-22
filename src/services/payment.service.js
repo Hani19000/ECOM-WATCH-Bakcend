@@ -5,6 +5,7 @@
  * Supporte le paiement en mode guest (sans compte) et authentifié.
  */
 import { ordersRepo, inventoryRepo, paymentsRepo, usersRepo } from '../repositories/index.js';
+import { productsRepo } from '../repositories/index.js';
 import { notificationService } from './notifications/notification.service.js';
 import { AppError } from '../utils/appError.js';
 import { cacheService } from './cache.service.js';
@@ -38,8 +39,6 @@ class PaymentService {
             throw new AppError('Commande introuvable', HTTP_STATUS.NOT_FOUND);
         }
 
-        // ordersRepo.findById() ne retourne pas les items (pas de JOIN).
-        // Chargement explicite pour alimenter la description Stripe.
         order.items = await ordersRepo.listItems(orderId);
 
         if (user && order.userId && order.userId !== user.id) {
@@ -142,6 +141,9 @@ class PaymentService {
      * Gère la finalisation d'une session de paiement réussie.
      * Toutes les mutations (commande + stock) sont dans une seule transaction SQL
      * pour garantir la cohérence en cas d'erreur partielle.
+     *
+     * FIX : Après le COMMIT, invalide le cache Redis product:details pour chaque
+     * variante achetée, afin que la prochaine lecture reflète le stock réel.
      */
     async _handleCheckoutCompleted(session) {
         const orderId = session.metadata.orderId;
@@ -167,12 +169,19 @@ class PaymentService {
 
             for (const item of items) {
                 await inventoryRepo.confirmSale(item.variantId, item.quantity, client);
-                // Invalidation du cache post-mutation — fire-and-forget pour ne pas bloquer le commit
+                // Invalidation immédiate de la clé stock
                 cacheService.delete(`stock:variant:${item.variantId}`).catch(() => { });
             }
 
             await client.query('COMMIT');
             logInfo(`Paiement validé et stock confirmé pour commande : ${orderId}`);
+
+            // FIX : Invalider le cache product:details après COMMIT.
+            // La transaction est terminée — on peut maintenant nettoyer Redis
+            // sans risquer de servir des données incohérentes pendant le commit.
+            for (const item of items) {
+                this._invalidateProductCache(item.variantId).catch(() => { });
+            }
 
             // Notifications hors transaction pour ne pas bloquer la DB
             this._triggerPostPaymentNotifications(session, orderId).catch((err) =>
@@ -182,9 +191,33 @@ class PaymentService {
         } catch (error) {
             await client.query('ROLLBACK');
             logError(error, { context: 'handleCheckoutCompleted', orderId });
-            throw error; // Permet à Stripe de réessayer le webhook si besoin
+            throw error;
         } finally {
             client.release();
+        }
+    }
+
+    /**
+     * Invalide le cache Redis d'un produit à partir d'un variantId.
+     * Récupère l'id et le slug du produit parent pour cibler les deux clés de cache.
+     *
+     * @param {string} variantId - UUID de la variante achetée
+     */
+    async _invalidateProductCache(variantId) {
+        try {
+            const variant = await productsRepo.findVariantById(variantId);
+            if (variant?.productId) {
+                const product = await productsRepo.findById(variant.productId);
+                if (product) {
+                    await cacheService.deleteMany([
+                        `product:details:${product.id}`,
+                        `product:details:${product.slug}`,
+                    ]);
+                    logInfo(`Cache produit invalidé après paiement : ${product.slug}`);
+                }
+            }
+        } catch (error) {
+            logError(error, { context: 'PaymentService invalidateProductCache', variantId });
         }
     }
 
@@ -254,7 +287,6 @@ class PaymentService {
         const normalizedOrderEmail = orderEmail.trim().toLowerCase();
 
         if (normalizedGuestEmail !== normalizedOrderEmail) {
-            // Longueurs uniquement — pas d'emails dans les logs pour la sécurité
             logError(new Error('Tentative accès guest avec email incorrect'), {
                 orderId,
                 attemptedEmailLength: guestEmail.length,
@@ -282,11 +314,9 @@ class PaymentService {
             const customerEmail = session.customer_details?.email || session.customer_email;
             if (customerEmail) await this._sendGuestOrderConfirmation(customerEmail, order);
         } else if (order.userId) {
-            // CORRECTION : On récupère l'objet utilisateur pour obtenir son email
             const user = await usersRepo.findById(order.userId);
 
             if (user && user.email) {
-                // On passe l'email et non l'ID
                 await notificationService.notifyOrderPaid(user.email, order);
             } else {
                 logError(new Error('Email introuvable pour la notification utilisateur'), { orderId, userId: order.userId });

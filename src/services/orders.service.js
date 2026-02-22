@@ -6,6 +6,7 @@ import { productsRepo } from '../repositories/index.js';
 import { shippingService } from './shipping.service.js';
 import { taxService } from './tax.service.js';
 import { notificationService } from './notifications/notification.service.js';
+import { cacheService } from './cache.service.js';
 import { AppError } from '../utils/appError.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
 import { pgPool } from '../config/database.js';
@@ -75,19 +76,6 @@ class OrderService {
         }
     }
 
-    /**
-     * Résout le prix effectif d'une variante en tenant compte des promotions actives.
-     * Délègue à productsRepo pour respecter la séparation des domaines :
-     * la logique promotion appartient au domaine "produit", pas "commande".
-     *
-     * S'exécute dans la transaction existante (même `client`) pour garantir
-     * une vue cohérente de la DB entre la réservation de stock et le calcul du prix.
-     *
-     * @param {string} variantId   - UUID de la variante
-     * @param {number} basePrice   - Prix de base retourné par inventoryRepo.reserve()
-     * @param {object} client      - Client de transaction PostgreSQL
-     * @returns {Promise<number>}  - Prix promotionnel si actif, prix de base sinon
-     */
     async #resolveEffectivePrice(variantId, basePrice, client) {
         const promotionData = await productsRepo.findActivePromotionPrice(variantId, client);
 
@@ -96,6 +84,33 @@ class OrderService {
         }
 
         return promotionData.effectivePrice;
+    }
+
+    /**
+     * Invalide le cache Redis d'un produit à partir d'un variantId.
+     * Fire-and-forget : ne bloque jamais le flux principal.
+     *
+     * FIX : Appelé après chaque réservation/libération de stock pour que la prochaine
+     * requête produit retourne le stock réel depuis la DB et non le cache périmé.
+     */
+    async #invalidateVariantCache(variantId) {
+        try {
+            await cacheService.delete(`stock:variant:${variantId}`);
+
+            const variant = await productsRepo.findVariantById(variantId);
+            if (variant?.productId) {
+                const product = await productsRepo.findById(variant.productId);
+                if (product) {
+                    await cacheService.deleteMany([
+                        `product:details:${product.id}`,
+                        `product:details:${product.slug}`,
+                    ]);
+                }
+            }
+        } catch (error) {
+            // Silencieux : l'invalidation de cache ne doit jamais bloquer la commande
+            logError(error, { context: 'OrderService invalidateVariantCache', variantId });
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -122,11 +137,8 @@ class OrderService {
             const itemsWithRealPrices = [];
 
             for (const item of items) {
-                // 1. Réserve le stock — retourne le prix de BASE de la variante
                 const inventoryEntry = await inventoryRepo.reserve(item.variantId, item.quantity, client);
 
-                // 2. CORRECTION : Résout le prix effectif (promotionnel ou de base)
-                //    dans la même transaction pour avoir une vue DB cohérente.
                 const effectivePrice = await this.#resolveEffectivePrice(
                     item.variantId,
                     inventoryEntry.price,
@@ -135,8 +147,8 @@ class OrderService {
 
                 itemsWithRealPrices.push({
                     ...item,
-                    price: effectivePrice,             // ← prix promo si active, base sinon
-                    basePrice: inventoryEntry.price,   // ← conservé pour audit / affichage
+                    price: effectivePrice,
+                    basePrice: inventoryEntry.price,
                     weight: inventoryEntry.weight || 0.5,
                 });
             }
@@ -163,12 +175,20 @@ class OrderService {
                     variantId: item.variantId,
                     productName: item.productName,
                     variantAttributes: item.variantAttributes,
-                    unitPrice: item.price,   // ← prix effectif stocké dans order_items
+                    unitPrice: item.price,
                     quantity: item.quantity,
                 });
             }
 
             await client.query('COMMIT');
+
+            // FIX : Invalider le cache produit après réservation de stock.
+            // Le available_stock vient d'être décrémenté en DB — le cache Redis
+            // doit l'être aussi pour que la prochaine lecture soit cohérente.
+            for (const item of itemsWithRealPrices) {
+                this.#invalidateVariantCache(item.variantId).catch(() => { });
+            }
+
             return { ...order, pricing: totals };
         } catch (error) {
             await client.query('ROLLBACK');
@@ -196,8 +216,6 @@ class OrderService {
             throw new AppError('Le panier est vide', HTTP_STATUS.BAD_REQUEST);
         }
 
-        // CORRECTION : La prévisualisation résout également le prix promotionnel.
-        // On utilise pgPool directement (pas de transaction) car c'est une lecture seule.
         const itemsWithRealPrices = await Promise.all(
             cartItems.map(async (item) => {
                 const variant = await inventoryRepo.findByVariantId(item.variantId);
@@ -380,6 +398,8 @@ class OrderService {
             const items = await ordersRepo.listItems(orderId);
             for (const item of items) {
                 await inventoryRepo.release(item.variantId, item.quantity);
+                // FIX : Invalider le cache après libération du stock (annulation)
+                this.#invalidateVariantCache(item.variantId).catch(() => { });
             }
         }
 
