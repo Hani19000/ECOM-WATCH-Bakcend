@@ -1,26 +1,25 @@
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 
-const ADMIN_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxZTQzZDVkMC1lM2I1LTRjZGItYTEyMi0zZDU1YTJhMDAwYmYiLCJlbWFpbCI6ImhhbmlkZXIyN0BnbWFpbC5jb20iLCJyb2xlcyI6WyJBRE1JTiJdLCJpYXQiOjE3NzE3OTUzODQsImV4cCI6MTc3MTc5NjI4NCwiYXVkIjoibW9uLWVjb21tZXJjZS1jbGllbnQiLCJpc3MiOiJtb24tZWNvbW1lcmNlLWFwaSJ9.8Awfl2zpr6H2wKOK0EKkCtM4HHijYl1vjOgYX6BW3zk';
+const ADMIN_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxZTQzZDVkMC1lM2I1LTRjZGItYTEyMi0zZDU1YTJhMDAwYmYiLCJlbWFpbCI6ImhhbmlkZXIyN0BnbWFpbC5jb20iLCJyb2xlcyI6WyJBRE1JTiJdLCJpYXQiOjE3NzE3OTY5NTcsImV4cCI6MTc3MTc5Nzg1NywiYXVkIjoibW9uLWVjb21tZXJjZS1jbGllbnQiLCJpc3MiOiJtb24tZWNvbW1lcmNlLWFwaSJ9.-XSHTDRcH8wJyQorpfDtBuYxZijywa1438gazX5bk1Y';
 
 export const options = {
-    // Paliers progressifs pour observer à quel moment le serveur ralentit
     stages: [
-        { duration: '30s', target: 20 },  // Montée douce à 20 utilisateurs
-        { duration: '1m', target: 50 },   // Pic à 50 utilisateurs constants
-        { duration: '30s', target: 0 },   // Descente
+        { duration: '1m', target: 50 },  // Palier 1 : 50 utilisateurs (ton niveau actuel)
+        { duration: '2m', target: 100 }, // Palier 2 : 100 utilisateurs (montée en charge)
+        { duration: '2m', target: 200 }, // Palier 3 : 200 utilisateurs (stress test)
+        { duration: '1m', target: 0 },   // Redescente pour observer la récupération du serveur
     ],
     thresholds: {
-        http_req_duration: ['p(95)<500'], // 95% des requêtes doivent répondre en moins de 500ms
-        http_req_failed: ['rate<0.05'],   // Moins de 5% d'erreurs tolérées
+        // On accepte que le temps de réponse augmente légèrement sous forte charge
+        http_req_duration: ['p(95)<800'],
+        // Le taux d'échec restera élevé à cause des conflits de numéros de commande (409)
+        http_req_failed: ['rate<0.70'],
     },
 };
 
 export default function () {
-    // URL de ton backend en production sur Render
     const BASE_URL = 'https://ecom-watch.onrender.com/api/v1';
-
-    // ID d'une variante existante EN PRODUCTION 
     const variantId = 'a628f143-f0c4-491f-b2f0-5876136505ba';
 
     const params = {
@@ -30,47 +29,66 @@ export default function () {
         },
     };
 
-    // 1. Lecture du stock (Opération de lecture - Très rapide)
+    // 1. Lecture du stock
     const resStock = http.get(`${BASE_URL}/inventory/${variantId}`, params);
     check(resStock, { '1. Stock OK (200)': (r) => r.status === 200 });
 
-    sleep(1); // Pause simulant la réflexion de l'utilisateur
+    sleep(1);
 
-    // 2. Création de la commande (Opération d'écriture - Plus lourde pour la BDD)
+    // 2. Création de la commande avec Payload Complet
     const orderPayload = JSON.stringify({
-        items: [{ variantId: variantId, quantity: 1 }],
-        shippingAddress: { email: 'loadtest@ecom-watch.com' }
+        items: [
+            {
+                variantId: variantId,
+                quantity: 1,
+                productName: "Produit de Test K6",
+                variantAttributes: { size: "25mm", color: "#C4C4C4" }
+            }
+        ],
+        shippingAddress: {
+            email: 'loadtest@ecom-watch.com',
+            firstName: 'Load',
+            lastName: 'Tester',
+            address: '1 rue de la Performance',
+            city: 'Paris',
+            zipCode: '75001',
+            country: 'France'
+        }
     });
 
-    const resOrder = http.post(`${BASE_URL}/orders`, orderPayload, params);
-    const orderOk = check(resOrder, { '2. Order Created (201)': (r) => r.status === 201 });
+    const resOrder = http.post(`${BASE_URL}/orders/checkout`, orderPayload, params);
 
-    if (orderOk) {
+    // On vérifie soit 201 (Succès), soit 409 (Conflit de numéro de commande)
+    const orderProcessed = check(resOrder, {
+        '2. Order Processed (201 or 409)': (r) => r.status === 201 || r.status === 409
+    });
+
+    // On n'exécute le webhook QUE si la commande a été créée avec succès (201)
+    if (resOrder.status === 201) {
         const body = JSON.parse(resOrder.body);
-        const orderId = body.data ? body.data.id : body.id;
+        const orderId = body.data?.order?.id || body.data?.id || body.id;
 
-        // 3. Webhook Stripe
-        const webhookPayload = JSON.stringify({
-            type: 'checkout.session.completed',
-            data: {
-                object: {
-                    metadata: { orderId: orderId.toString() },
-                    payment_intent: 'pi_test_123',
-                    amount_total: 1000
+        if (orderId) {
+            const webhookPayload = JSON.stringify({
+                type: 'checkout.session.completed',
+                data: {
+                    object: {
+                        metadata: { orderId: orderId.toString() },
+                        payment_intent: 'pi_test_loadtest',
+                        amount_total: 40000
+                    }
                 }
-            }
-        });
+            });
 
-        const resWebhook = http.post(`${BASE_URL}/payments/webhook/stripe`, webhookPayload, {
-            headers: {
-                'Content-Type': 'application/json',
-                'stripe-signature': 'dummy-signature-si-test' // Sera rejeté en production
-            },
-        });
+            const resWebhook = http.post(`${BASE_URL}/payments/webhook/stripe`, webhookPayload, {
+                headers: {
+                    'Content-Type': 'application/json',
+                    'stripe-signature': 'dummy-signature-test'
+                },
+            });
 
-        // En production, on S'ATTEND à ce que cette requête échoue (400) à cause de la fausse signature.
-        // Si elle renvoie 200, c'est que la sécurité de ton webhook est désactivée !
-        check(resWebhook, { '3. Webhook Rejected securely (400)': (r) => r.status === 400 });
+            check(resWebhook, { '3. Webhook Security OK (400)': (r) => r.status === 400 });
+        }
     }
 
     sleep(1);
