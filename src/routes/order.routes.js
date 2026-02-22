@@ -115,4 +115,20 @@ router.patch(
     orderController.updateStatus
 );
 
+
+/**
+ * POST /api/v1/orders/:orderId/cancel
+ * Annule une commande PENDING et libère le stock réservé (ex: retour depuis Stripe).
+ * Accessible par les guests et les utilisateurs connectés.
+ */
+router.post(
+    '/:orderId/cancel',
+    optionalAuth,
+    (req, _res, next) => {
+        validateUUID(req.params.orderId, 'orderId');
+        next();
+    },
+    orderController.cancelOrder
+);
+
 export default router;
