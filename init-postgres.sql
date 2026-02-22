@@ -432,7 +432,6 @@ CREATE INDEX idx_shipments_order ON shipments(order_id);
 
 -- ================================================================
 -- VUE INVENTAIRE — VERSION UNIQUE ET FINALE
--- FIX : Définie une seule fois (3 DROP/CREATE dans la version originale)
 -- ================================================================
 CREATE VIEW view_inventory_status AS
 SELECT

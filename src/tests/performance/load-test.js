@@ -5,15 +5,13 @@ const ADMIN_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxZTQzZDVkMC
 
 export const options = {
     stages: [
-        { duration: '1m', target: 50 },  // Palier 1 : 50 utilisateurs (ton niveau actuel)
+        { duration: '1m', target: 50 },  // Palier 1 : 50 utilisateurs 
         { duration: '2m', target: 100 }, // Palier 2 : 100 utilisateurs (montée en charge)
         { duration: '2m', target: 200 }, // Palier 3 : 200 utilisateurs (stress test)
         { duration: '1m', target: 0 },   // Redescente pour observer la récupération du serveur
     ],
     thresholds: {
-        // On accepte que le temps de réponse augmente légèrement sous forte charge
         http_req_duration: ['p(95)<800'],
-        // Le taux d'échec restera élevé à cause des conflits de numéros de commande (409)
         http_req_failed: ['rate<0.70'],
     },
 };
@@ -58,12 +56,12 @@ export default function () {
 
     const resOrder = http.post(`${BASE_URL}/orders/checkout`, orderPayload, params);
 
-    // On vérifie soit 201 (Succès), soit 409 (Conflit de numéro de commande)
+    // vérifie soit 201 (Succès), soit 409 (Conflit de numéro de commande)
     const orderProcessed = check(resOrder, {
         '2. Order Processed (201 or 409)': (r) => r.status === 201 || r.status === 409
     });
 
-    // On n'exécute le webhook QUE si la commande a été créée avec succès (201)
+    // n'exécute le webhook QUE si la commande a été créée avec succès (201)
     if (resOrder.status === 201) {
         const body = JSON.parse(resOrder.body);
         const orderId = body.data?.order?.id || body.data?.id || body.id;
