@@ -3,9 +3,18 @@
  *
  * Gère la création des sessions de paiement Stripe et le traitement des webhooks.
  * Supporte le paiement en mode guest (sans compte) et authentifié.
+ *
+ * Responsabilités :
+ * - Création de sessions Stripe Checkout
+ * - Traitement des webhooks (paiement réussi, session expirée, échec)
+ * - Vérification du statut de paiement
+ *
+ * Hors-scope (délégué à OrderService) :
+ * - Annulation de commande et libération de stock
  */
 import { ordersRepo, inventoryRepo, paymentsRepo, usersRepo } from '../repositories/index.js';
 import { productsRepo } from '../repositories/index.js';
+import { orderService } from './orders.service.js';
 import { notificationService } from './notifications/notification.service.js';
 import { AppError } from '../utils/appError.js';
 import { cacheService } from './cache.service.js';
@@ -172,7 +181,6 @@ class PaymentService {
 
             for (const item of items) {
                 await inventoryRepo.confirmSale(item.variantId, item.quantity, client);
-                // Invalidation immédiate de la clé stock
                 cacheService.delete(`stock:variant:${item.variantId}`).catch(() => { });
             }
 
@@ -199,11 +207,10 @@ class PaymentService {
 
     /**
      * Libère le stock réservé lorsqu'une session Stripe expire sans paiement.
-     * Déclenché automatiquement par Stripe après ~30 minutes d'inactivité,
-     * ou immédiatement si l'utilisateur clique "Annuler" sur la page Stripe.
      *
-     * Toutes les mutations sont dans une transaction SQL unique pour garantir
-     * la cohérence stock ↔ statut commande.
+     * Déclencheurs :
+     * - Stripe expire automatiquement la session après ~30 minutes d'inactivité
+     * - L'utilisateur ferme l'onglet sans payer
      *
      * @param {Object} session - Objet session Stripe (checkout.session.expired)
      */
@@ -213,59 +220,16 @@ class PaymentService {
 
         const order = await ordersRepo.findById(orderId);
 
-        // Idempotence : si la commande est déjà PAID ou CANCELLED, on ne touche à rien
+        // Idempotence : si la commande est déjà traitée, on ignore l'événement
         if (!order || order.status === 'PAID' || order.status === 'CANCELLED') {
-            logInfo(`[Webhook] Session expirée ignorée — commande ${orderId} déjà en statut ${order?.status}`);
+            logInfo(
+                `[Webhook] Session expirée ignorée — commande ${orderId} déjà en statut ${order?.status}`
+            );
             return;
         }
 
-        await this._cancelOrderAndReleaseStock(orderId, 'checkout.session.expired');
-    }
-
-    /**
-     * Annule une commande PENDING et libère tout le stock réservé associé.
-     * Utilisé par le webhook Stripe ET par la route de cancel frontend.
-     *
-     * Transaction atomique : si la libération d'un article échoue,
-     * toute l'opération est annulée pour éviter un état partiel.
-     *
-     * @param {string} orderId  - UUID de la commande à annuler
-     * @param {string} reason   - Motif pour les logs (traçabilité)
-     */
-    async _cancelOrderAndReleaseStock(orderId, reason = 'manual_cancel') {
-        const client = await pgPool.connect();
-
-        try {
-            await client.query('BEGIN');
-
-            const items = await ordersRepo.listItems(orderId, client);
-
-            // Libération atomique de chaque article réservé
-            for (const item of items) {
-                await inventoryRepo.release(item.variantId, item.quantity, client);
-                cacheService.delete(`stock:variant:${item.variantId}`).catch(() => { });
-            }
-
-            await client.query(
-                `UPDATE orders SET status = 'CANCELLED', updated_at = NOW() WHERE id = $1`,
-                [orderId]
-            );
-
-            await client.query('COMMIT');
-            logInfo(`[Stock] Commande annulée et stock libéré — orderId: ${orderId}, reason: ${reason}`);
-
-            // Invalidation du cache produit hors transaction (pas bloquant)
-            for (const item of items) {
-                this._invalidateProductCache(item.variantId).catch(() => { });
-            }
-
-        } catch (error) {
-            await client.query('ROLLBACK');
-            logError(error, { context: '_cancelOrderAndReleaseStock', orderId, reason });
-            throw error;
-        } finally {
-            client.release();
-        }
+        // Délégation à OrderService : responsable du cycle de vie de la commande
+        await orderService.cancelOrderAndReleaseStock(orderId, 'checkout.session.expired');
     }
 
     /**
@@ -390,7 +354,10 @@ class PaymentService {
             if (user && user.email) {
                 await notificationService.notifyOrderPaid(user.email, order);
             } else {
-                logError(new Error('Email introuvable pour la notification utilisateur'), { orderId, userId: order.userId });
+                logError(
+                    new Error('Email introuvable pour la notification utilisateur'),
+                    { orderId, userId: order.userId }
+                );
             }
         }
     }

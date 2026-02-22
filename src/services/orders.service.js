@@ -89,9 +89,6 @@ class OrderService {
     /**
      * Invalide le cache Redis d'un produit à partir d'un variantId.
      * Fire-and-forget : ne bloque jamais le flux principal.
-     *
-     * FIX : Appelé après chaque réservation/libération de stock pour que la prochaine
-     * requête produit retourne le stock réel depuis la DB et non le cache périmé.
      */
     async #invalidateVariantCache(variantId) {
         try {
@@ -108,8 +105,132 @@ class OrderService {
                 }
             }
         } catch (error) {
-            // Silencieux : l'invalidation de cache ne doit jamais bloquer la commande
             logError(error, { context: 'OrderService invalidateVariantCache', variantId });
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // ANNULATION & LIBÉRATION DE STOCK
+    // ─────────────────────────────────────────────────────────────────────
+
+    /**
+     * Annule une commande et libère atomiquement tout le stock réservé.
+     *
+     * Cette méthode est la source de vérité pour toute annulation de commande,
+     * qu'elle soit déclenchée par :
+     * - L'utilisateur depuis le frontend (clic sur "Annuler" côté Stripe)
+     * - Le webhook Stripe (checkout.session.expired)
+     * - Le cron de nettoyage (commandes PENDING expirées)
+     *
+     * Garanties :
+     * - Atomicité : si la libération d'un article échoue, tout le bloc est annulé (ROLLBACK)
+     * - Idempotence : si la commande est déjà CANCELLED, aucun effet de bord
+     *
+     * @param {string} orderId  - UUID de la commande à annuler
+     * @param {string} reason   - Motif pour les logs (traçabilité)
+     */
+    async cancelOrderAndReleaseStock(orderId, reason = 'manual_cancel') {
+        const client = await pgPool.connect();
+
+        try {
+            await client.query('BEGIN');
+
+            const items = await ordersRepo.listItems(orderId, client);
+
+            // Libération atomique de chaque article réservé
+            for (const item of items) {
+                await inventoryRepo.release(item.variantId, item.quantity, client);
+
+                // Invalidation synchrone de la clé stock dans la transaction
+                cacheService.delete(`stock:variant:${item.variantId}`).catch(() => { });
+            }
+
+            await client.query(
+                `UPDATE orders SET status = 'CANCELLED', updated_at = NOW() WHERE id = $1`,
+                [orderId]
+            );
+
+            await client.query('COMMIT');
+
+            logInfo(`[Stock] Stock libéré — orderId: ${orderId}, reason: ${reason}`);
+
+            // Invalidation du cache produit hors transaction (non bloquant)
+            for (const item of items) {
+                this.#invalidateVariantCache(item.variantId).catch(() => { });
+            }
+
+        } catch (error) {
+            await client.query('ROLLBACK');
+            logError(error, { context: 'OrderService.cancelOrderAndReleaseStock', orderId, reason });
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    /**
+     * Annule une commande PENDING à la demande d'un utilisateur ou d'un guest.
+     *
+     * Sécurité :
+     * - Mode authentifié : vérifie que la commande appartient bien à l'utilisateur
+     * - Mode guest : vérifie l'email de la commande comme second facteur
+     * - Seules les commandes PENDING peuvent être annulées ici (PAID est protégé)
+     * - Idempotence : retourne sans erreur si la commande est déjà CANCELLED
+     *
+     * @param {string} orderId      - UUID de la commande
+     * @param {Object|null} user    - Utilisateur connecté (null si guest)
+     * @param {string|null} email   - Email de vérification (requis si guest)
+     */
+    async cancelPendingOrder(orderId, user = null, email = null) {
+        const order = await ordersRepo.findById(orderId);
+
+        if (!order) {
+            throw new AppError('Commande introuvable', HTTP_STATUS.NOT_FOUND);
+        }
+
+        if (order.status === 'PAID') {
+            throw new AppError("Impossible d'annuler une commande déjà payée", HTTP_STATUS.BAD_REQUEST);
+        }
+
+        // Idempotence : retour silencieux si déjà annulée
+        if (order.status === 'CANCELLED') {
+            return { message: 'Commande déjà annulée' };
+        }
+
+        await this._assertOrderAccess(order, user, email);
+
+        // FIX : appel interne — plus de dépendance circulaire vers PaymentService
+        await this.cancelOrderAndReleaseStock(orderId, 'user_cancel');
+
+        return { message: 'Commande annulée avec succès' };
+    }
+
+    /**
+     * Vérifie que l'appelant est autorisé à accéder à la commande.
+     * Centralise la logique d'autorisation guest/authentifié.
+     *
+     * @param {Object} order        - Commande récupérée en base
+     * @param {Object|null} user    - Utilisateur connecté
+     * @param {string|null} email   - Email fourni par un guest
+     * @throws {AppError}           - 403 si l'accès est non autorisé
+     */
+    async _assertOrderAccess(order, user, email) {
+        if (user) {
+            if (order.userId && order.userId !== user.id) {
+                throw new AppError('Cette commande ne vous appartient pas', HTTP_STATUS.FORBIDDEN);
+            }
+            return;
+        }
+
+        // Vérification email pour les guests
+        const orderEmail = order.shippingAddress?.email?.trim().toLowerCase();
+        const providedEmail = email?.trim().toLowerCase();
+
+        if (!providedEmail || !orderEmail || providedEmail !== orderEmail) {
+            throw new AppError(
+                'Email requis ou incorrect pour accéder à cette commande',
+                HTTP_STATUS.FORBIDDEN
+            );
         }
     }
 
@@ -182,9 +303,6 @@ class OrderService {
 
             await client.query('COMMIT');
 
-            // FIX : Invalider le cache produit après réservation de stock.
-            // Le available_stock vient d'être décrémenté en DB — le cache Redis
-            // doit l'être aussi pour que la prochaine lecture soit cohérente.
             for (const item of itemsWithRealPrices) {
                 this.#invalidateVariantCache(item.variantId).catch(() => { });
             }
@@ -286,72 +404,6 @@ class OrderService {
             },
         };
     }
-
-
-    /**
- * Annule une commande PENDING et délègue la libération du stock au PaymentService.
- *
- * Sécurité :
- * - Mode authentifié : vérifie que la commande appartient bien à l'utilisateur.
- * - Mode guest : vérifie l'email de la commande comme second facteur.
- * - Seules les commandes PENDING peuvent être annulées ici (PAID est protégé).
- *
- * @param {string} orderId      - UUID de la commande
- * @param {Object|null} user    - Utilisateur connecté (null si guest)
- * @param {string|null} email   - Email de vérification (requis si guest)
- */
-    async cancelPendingOrder(orderId, user = null, email = null) {
-        const order = await ordersRepo.findById(orderId);
-
-        if (!order) {
-            throw new AppError('Commande introuvable', HTTP_STATUS.NOT_FOUND);
-        }
-
-        // Une commande déjà payée ou annulée ne peut pas être annulée à nouveau
-        if (order.status === 'PAID') {
-            throw new AppError('Impossible d\'annuler une commande déjà payée', HTTP_STATUS.BAD_REQUEST);
-        }
-
-        if (order.status === 'CANCELLED') {
-            // Idempotence : on retourne sans erreur si déjà annulée
-            return { message: 'Commande déjà annulée' };
-        }
-
-        // Vérification de propriété selon le mode (authentifié vs guest)
-        await this._assertOrderAccess(order, user, email);
-
-        // Délégation à PaymentService pour la logique stock + statut (SRP)
-        await paymentService._cancelOrderAndReleaseStock(orderId, 'user_cancel');
-
-        return { message: 'Commande annulée avec succès' };
-    }
-
-    /**
-     * Vérifie que l'appelant est bien autorisé à accéder à la commande.
-     * Centralise la logique d'autorisation guest/authentifié pour la réutiliser.
-     *
-     * @param {Object} order        - Commande récupérée en base
-     * @param {Object|null} user    - Utilisateur connecté
-     * @param {string|null} email   - Email fourni par un guest
-     * @throws {AppError}           - 403 si l'accès est non autorisé
-     */
-    async _assertOrderAccess(order, user, email) {
-        if (user) {
-            if (order.userId && order.userId !== user.id) {
-                throw new AppError('Cette commande ne vous appartient pas', HTTP_STATUS.FORBIDDEN);
-            }
-            return;
-        }
-
-        // Vérification email pour les guests (timing-safe via normalisation)
-        const orderEmail = order.shippingAddress?.email?.trim().toLowerCase();
-        const providedEmail = email?.trim().toLowerCase();
-
-        if (!providedEmail || !orderEmail || providedEmail !== orderEmail) {
-            throw new AppError('Email requis ou incorrect pour accéder à cette commande', HTTP_STATUS.FORBIDDEN);
-        }
-    }
-
 
     // ─────────────────────────────────────────────────────────────────────
     // LECTURE — MODE GUEST (suivi public)
@@ -464,12 +516,13 @@ class OrderService {
             const items = await ordersRepo.listItems(orderId);
             for (const item of items) {
                 await inventoryRepo.release(item.variantId, item.quantity);
-                // FIX : Invalider le cache après libération du stock (annulation)
                 this.#invalidateVariantCache(item.variantId).catch(() => { });
             }
         }
 
-        this.#sendOrderStatusNotification(previousStatus, newStatus, updatedOrder.userId, updatedOrder, { shipment: shipmentData });
+        this.#sendOrderStatusNotification(
+            previousStatus, newStatus, updatedOrder.userId, updatedOrder, { shipment: shipmentData }
+        );
         return updatedOrder;
     }
 
