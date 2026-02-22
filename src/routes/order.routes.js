@@ -19,6 +19,11 @@ import { HTTP_STATUS } from '../constants/httpStatus.js';
 
 const router = Router();
 
+// Format : ORD-{4 chiffres année}-{1 à 10 chiffres séquentiels}
+// Aligné avec le regex du repository (ordersRepo.findByOrderNumberAndEmail)
+// et la génération effective des order_number en base (pas de zéro-padding).
+const ORDER_NUMBER_REGEX = /^ORD-\d{4}-\d{1,10}$/;
+
 // ─────────────────────────────────────────────────────────────────────
 // 1. ROUTES STATIQUES — GUEST / OPTIONNEL
 // ─────────────────────────────────────────────────────────────────────
@@ -32,13 +37,14 @@ router.post('/checkout', optionalAuth, orderController.checkout);
  * Suivi de commande par numéro + email (guests uniquement).
  * Rate limiting strict pour prévenir l'énumération de commandes.
  */
-router.post('/track-guest',
+router.post(
+    '/track-guest',
     trackingGuestLimiter,
     (req, _res, next) => {
         validateRequired(req.body, ['orderNumber', 'email']);
         validateEmail(req.body.email);
 
-        if (!/^ORD-\d{4}-\d{6}$/.test(req.body.orderNumber)) {
+        if (!ORDER_NUMBER_REGEX.test(req.body.orderNumber)) {
             throw new AppError('Format de numéro de commande invalide', HTTP_STATUS.BAD_REQUEST);
         }
 
@@ -70,7 +76,8 @@ router.get('/', protect, restrictTo('ADMIN'), orderController.getAllOrders);
  * Mode guest : requiert ?email= pour vérification timing-safe côté service.
  * trackingGuestLimiter protège les deux modes contre l'énumération.
  */
-router.get('/:orderId',
+router.get(
+    '/:orderId',
     trackingGuestLimiter,
     optionalAuth,
     (req, _res, next) => {
@@ -85,7 +92,8 @@ router.get('/:orderId',
  * Rattache une commande guest au compte de l'utilisateur connecté.
  * Dès que le claim réussit, la commande devient invisible pour tout accès guest.
  */
-router.post('/:orderId/claim',
+router.post(
+    '/:orderId/claim',
     protect,
     (req, _res, next) => {
         validateRequired(req.body, ['email']);
@@ -100,7 +108,8 @@ router.post('/:orderId/claim',
  * PATCH /api/v1/orders/:orderId/status
  * ADMINISTRATION : mise à jour du statut d'une commande.
  */
-router.patch('/:orderId/status',
+router.patch(
+    '/:orderId/status',
     protect,
     restrictTo('ADMIN'),
     orderController.updateStatus
