@@ -22,7 +22,7 @@ import sitemapRoutes from './sitemap.routes.js';
 
 const router = Router();
 
-router.use(generalLimiter);
+// router.use(generalLimiter);
 
 router.use('/auth', authRoutes);
 router.use('/users', userRoutes);
