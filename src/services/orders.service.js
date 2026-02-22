@@ -287,6 +287,72 @@ class OrderService {
         };
     }
 
+
+    /**
+ * Annule une commande PENDING et délègue la libération du stock au PaymentService.
+ *
+ * Sécurité :
+ * - Mode authentifié : vérifie que la commande appartient bien à l'utilisateur.
+ * - Mode guest : vérifie l'email de la commande comme second facteur.
+ * - Seules les commandes PENDING peuvent être annulées ici (PAID est protégé).
+ *
+ * @param {string} orderId      - UUID de la commande
+ * @param {Object|null} user    - Utilisateur connecté (null si guest)
+ * @param {string|null} email   - Email de vérification (requis si guest)
+ */
+    async cancelPendingOrder(orderId, user = null, email = null) {
+        const order = await ordersRepo.findById(orderId);
+
+        if (!order) {
+            throw new AppError('Commande introuvable', HTTP_STATUS.NOT_FOUND);
+        }
+
+        // Une commande déjà payée ou annulée ne peut pas être annulée à nouveau
+        if (order.status === 'PAID') {
+            throw new AppError('Impossible d\'annuler une commande déjà payée', HTTP_STATUS.BAD_REQUEST);
+        }
+
+        if (order.status === 'CANCELLED') {
+            // Idempotence : on retourne sans erreur si déjà annulée
+            return { message: 'Commande déjà annulée' };
+        }
+
+        // Vérification de propriété selon le mode (authentifié vs guest)
+        await this._assertOrderAccess(order, user, email);
+
+        // Délégation à PaymentService pour la logique stock + statut (SRP)
+        await paymentService._cancelOrderAndReleaseStock(orderId, 'user_cancel');
+
+        return { message: 'Commande annulée avec succès' };
+    }
+
+    /**
+     * Vérifie que l'appelant est bien autorisé à accéder à la commande.
+     * Centralise la logique d'autorisation guest/authentifié pour la réutiliser.
+     *
+     * @param {Object} order        - Commande récupérée en base
+     * @param {Object|null} user    - Utilisateur connecté
+     * @param {string|null} email   - Email fourni par un guest
+     * @throws {AppError}           - 403 si l'accès est non autorisé
+     */
+    async _assertOrderAccess(order, user, email) {
+        if (user) {
+            if (order.userId && order.userId !== user.id) {
+                throw new AppError('Cette commande ne vous appartient pas', HTTP_STATUS.FORBIDDEN);
+            }
+            return;
+        }
+
+        // Vérification email pour les guests (timing-safe via normalisation)
+        const orderEmail = order.shippingAddress?.email?.trim().toLowerCase();
+        const providedEmail = email?.trim().toLowerCase();
+
+        if (!providedEmail || !orderEmail || providedEmail !== orderEmail) {
+            throw new AppError('Email requis ou incorrect pour accéder à cette commande', HTTP_STATUS.FORBIDDEN);
+        }
+    }
+
+
     // ─────────────────────────────────────────────────────────────────────
     // LECTURE — MODE GUEST (suivi public)
     // ─────────────────────────────────────────────────────────────────────

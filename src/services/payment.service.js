@@ -65,7 +65,7 @@ class PaymentService {
                 isGuestCheckout: user ? 'false' : 'true',
             },
             success_url: `${ENV.clientUrl}/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
-            cancel_url: `${ENV.clientUrl}/checkout/cancel`,
+            cancel_url: `${ENV.clientUrl}/checkout/cancel?orderId=${order.id}`,
             line_items: [
                 {
                     price_data: {
@@ -127,9 +127,15 @@ class PaymentService {
             case 'checkout.session.completed':
                 await this._handleCheckoutCompleted(event.data.object);
                 break;
+
+            case 'checkout.session.expired':
+                await this._handleCheckoutExpired(event.data.object);
+                break;
+
             case 'payment_intent.payment_failed':
                 await this._handlePaymentFailed(event.data.object);
                 break;
+
             default:
                 break;
         }
@@ -141,9 +147,6 @@ class PaymentService {
      * Gère la finalisation d'une session de paiement réussie.
      * Toutes les mutations (commande + stock) sont dans une seule transaction SQL
      * pour garantir la cohérence en cas d'erreur partielle.
-     *
-     * FIX : Après le COMMIT, invalide le cache Redis product:details pour chaque
-     * variante achetée, afin que la prochaine lecture reflète le stock réel.
      */
     async _handleCheckoutCompleted(session) {
         const orderId = session.metadata.orderId;
@@ -176,9 +179,6 @@ class PaymentService {
             await client.query('COMMIT');
             logInfo(`Paiement validé et stock confirmé pour commande : ${orderId}`);
 
-            // FIX : Invalider le cache product:details après COMMIT.
-            // La transaction est terminée — on peut maintenant nettoyer Redis
-            // sans risquer de servir des données incohérentes pendant le commit.
             for (const item of items) {
                 this._invalidateProductCache(item.variantId).catch(() => { });
             }
@@ -191,6 +191,77 @@ class PaymentService {
         } catch (error) {
             await client.query('ROLLBACK');
             logError(error, { context: 'handleCheckoutCompleted', orderId });
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    /**
+     * Libère le stock réservé lorsqu'une session Stripe expire sans paiement.
+     * Déclenché automatiquement par Stripe après ~30 minutes d'inactivité,
+     * ou immédiatement si l'utilisateur clique "Annuler" sur la page Stripe.
+     *
+     * Toutes les mutations sont dans une transaction SQL unique pour garantir
+     * la cohérence stock ↔ statut commande.
+     *
+     * @param {Object} session - Objet session Stripe (checkout.session.expired)
+     */
+    async _handleCheckoutExpired(session) {
+        const orderId = session.metadata?.orderId;
+        if (!orderId) return;
+
+        const order = await ordersRepo.findById(orderId);
+
+        // Idempotence : si la commande est déjà PAID ou CANCELLED, on ne touche à rien
+        if (!order || order.status === 'PAID' || order.status === 'CANCELLED') {
+            logInfo(`[Webhook] Session expirée ignorée — commande ${orderId} déjà en statut ${order?.status}`);
+            return;
+        }
+
+        await this._cancelOrderAndReleaseStock(orderId, 'checkout.session.expired');
+    }
+
+    /**
+     * Annule une commande PENDING et libère tout le stock réservé associé.
+     * Utilisé par le webhook Stripe ET par la route de cancel frontend.
+     *
+     * Transaction atomique : si la libération d'un article échoue,
+     * toute l'opération est annulée pour éviter un état partiel.
+     *
+     * @param {string} orderId  - UUID de la commande à annuler
+     * @param {string} reason   - Motif pour les logs (traçabilité)
+     */
+    async _cancelOrderAndReleaseStock(orderId, reason = 'manual_cancel') {
+        const client = await pgPool.connect();
+
+        try {
+            await client.query('BEGIN');
+
+            const items = await ordersRepo.listItems(orderId, client);
+
+            // Libération atomique de chaque article réservé
+            for (const item of items) {
+                await inventoryRepo.release(item.variantId, item.quantity, client);
+                cacheService.delete(`stock:variant:${item.variantId}`).catch(() => { });
+            }
+
+            await client.query(
+                `UPDATE orders SET status = 'CANCELLED', updated_at = NOW() WHERE id = $1`,
+                [orderId]
+            );
+
+            await client.query('COMMIT');
+            logInfo(`[Stock] Commande annulée et stock libéré — orderId: ${orderId}, reason: ${reason}`);
+
+            // Invalidation du cache produit hors transaction (pas bloquant)
+            for (const item of items) {
+                this._invalidateProductCache(item.variantId).catch(() => { });
+            }
+
+        } catch (error) {
+            await client.query('ROLLBACK');
+            logError(error, { context: '_cancelOrderAndReleaseStock', orderId, reason });
             throw error;
         } finally {
             client.release();

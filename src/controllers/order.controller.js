@@ -75,6 +75,26 @@ class OrderController {
     });
 
     /**
+     * POST /api/v1/orders/:orderId/cancel
+     * Annule une commande PENDING et libère le stock réservé.
+     *
+     * Accessible en mode guest (avec ?email=) et authentifié.
+     * Utilisé par le frontend sur la page /checkout/cancel.
+     */
+    cancelOrder = asyncHandler(async (req, res) => {
+        const { orderId } = req.params;
+        const email = req.query.email || req.body.email || null;
+
+        const result = await orderService.cancelPendingOrder(orderId, req.user ?? null, email);
+
+        res.status(HTTP_STATUS.OK).json({
+            status: 'success',
+            message: result.message,
+        });
+    });
+
+
+    /**
      * POST /api/v1/orders/track-guest
      * Suivi de commande pour les guests (non-authentifiés).
      */
