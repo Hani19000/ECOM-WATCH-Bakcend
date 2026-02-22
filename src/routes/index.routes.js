@@ -18,6 +18,7 @@ import paymentRoutes from './payment.routes.js';
 import inventoryRoutes from './inventory.routes.js';
 import taxRoutes from './tax.routes.js';
 import adminRoutes from './admin.routes.js';
+import { generateProductsSitemap } from '../controllers/sitemap.controller.js';
 
 const router = Router();
 
@@ -35,5 +36,6 @@ router.use('/payments', paymentRoutes);
 router.use('/inventory', inventoryRoutes);
 router.use('/taxes', taxRoutes);
 router.use('/admin', adminRoutes);
+router.get('/sitemap-products.xml', generateProductsSitemap);
 
 export default router;
