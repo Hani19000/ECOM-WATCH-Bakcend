@@ -17,15 +17,39 @@ import { mapRow, mapRows } from './_mappers.js';
 import { validateUUID } from '../utils/validation.js';
 import crypto from 'crypto';
 
+// ─────────────────────────────────────────────────────────────────────
+// FRAGMENT SQL RÉUTILISABLE — items avec image
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Fragment json_build_object commun pour les agrégations d'items.
+ *
+ * FIX : Ajout du JOIN product_variants (pv) et du champ `image`.
+ * L'image est lue directement depuis pv.attributes pour garantir
+ * une URL valide indépendamment de ce qui était stocké dans
+ * order_items.variant_attributes au moment du checkout.
+ *
+ * Le frontend cherche déjà item.image en premier dans sa chaîne de
+ * fallback — ce champ était simplement absent jusqu'ici.
+ */
+const ITEM_JSON_OBJECT = `
+    json_build_object(
+        'id',                oi.id,
+        'variantId',         oi.variant_id,
+        'productName',       oi.product_name,
+        'variantAttributes', oi.variant_attributes,
+        'unitPrice',         oi.unit_price,
+        'quantity',          oi.quantity,
+        'image',             pv.attributes->>'image'
+    )
+`;
+
 export const ordersRepo = {
 
   // ─────────────────────────────────────────────────────────────────────
   // ÉCRITURE
   // ─────────────────────────────────────────────────────────────────────
 
-  /**
-   * Insère l'en-tête d'une commande dans une transaction existante.
-   */
   async createOrder(client, {
     userId,
     subtotalAmount,
@@ -79,9 +103,6 @@ export const ordersRepo = {
     return mapRow(rows[0]);
   },
 
-  /**
-   * Crée une commande et ses articles de manière atomique.
-   */
   async createWithItems({ order, items }) {
     const client = await pgPool.connect();
     try {
@@ -106,10 +127,6 @@ export const ordersRepo = {
   // LECTURE — ACCÈS UNIVERSEL (authentifié ou admin)
   // ─────────────────────────────────────────────────────────────────────
 
-  /**
-   * Récupère une commande sans restriction de périmètre.
-   * Réservé aux flux authentifiés (le service vérifie ensuite les droits).
-   */
   async findById(id) {
     validateUUID(id, 'orderId');
     const { rows } = await pgPool.query(
@@ -126,16 +143,8 @@ export const ordersRepo = {
   /**
    * Récupération guest par UUID — barrière principale.
    *
-   * Le filtre `user_id IS NULL` est en SQL et non dans le service pour garantir
-   * que la barrière est indiscutable. Un refactoring ne peut pas l'omettre.
-   *
-   * Comportement :
-   * - Commande guest (user_id IS NULL)       → retourne la commande avec ses items
-   * - Commande rattachée (user_id IS NOT NULL) → retourne null (invisible)
-   * - UUID inconnu                            → retourne null
-   *
-   * Dès que transferOwnership met à jour user_id, cette requête ne retourne
-   * plus rien — immuablement et immédiatement.
+   * FIX : LEFT JOIN product_variants pour exposer pv.attributes->>'image'
+   * dans chaque item via ITEM_JSON_OBJECT.
    */
   async findGuestOnlyById(id) {
     validateUUID(id, 'orderId');
@@ -145,19 +154,13 @@ export const ordersRepo = {
                o.*,
                COALESCE(
                  json_agg(
-                   json_build_object(
-                     'id',                oi.id,
-                     'variantId',         oi.variant_id,
-                     'productName',       oi.product_name,
-                     'variantAttributes', oi.variant_attributes,
-                     'unitPrice',         oi.unit_price,
-                     'quantity',          oi.quantity
-                   )
+                   ${ITEM_JSON_OBJECT}
                  ) FILTER (WHERE oi.id IS NOT NULL),
                  '[]'
                ) AS items
              FROM orders o
              LEFT JOIN order_items oi ON oi.order_id = o.id
+             LEFT JOIN product_variants pv ON pv.id = oi.variant_id
              WHERE o.id = $1
                AND o.user_id IS NULL
              GROUP BY o.id`,
@@ -170,10 +173,8 @@ export const ordersRepo = {
   /**
    * Recherche guest par numéro + email — timing-safe.
    *
-   * user_id IS NULL est la barrière de sécurité : dès qu'une commande est
-   * rattachée à un compte, cette requête ne renvoie plus rien.
-   * La comparaison de l'email se fait côté applicatif en timing-safe
-   * pour éviter les attaques par timing sur la longueur de l'email.
+   * FIX : LEFT JOIN product_variants pour exposer pv.attributes->>'image'
+   * dans chaque item via ITEM_JSON_OBJECT.
    */
   async findByOrderNumberAndEmail(orderNumber, email) {
     const orderNumberRegex = /^ORD-\d{4}-\d+$/;
@@ -186,19 +187,13 @@ export const ordersRepo = {
                o.*,
                COALESCE(
                  json_agg(
-                   json_build_object(
-                     'id',                oi.id,
-                     'variantId',         oi.variant_id,
-                     'productName',       oi.product_name,
-                     'variantAttributes', oi.variant_attributes,
-                     'unitPrice',         oi.unit_price,
-                     'quantity',          oi.quantity
-                   )
+                   ${ITEM_JSON_OBJECT}
                  ) FILTER (WHERE oi.id IS NOT NULL),
                  '[]'
                ) AS items
              FROM orders o
              LEFT JOIN order_items oi ON oi.order_id = o.id
+             LEFT JOIN product_variants pv ON pv.id = oi.variant_id
              WHERE o.order_number = $1
                AND o.user_id IS NULL
              GROUP BY o.id`,
@@ -209,7 +204,6 @@ export const ordersRepo = {
 
     const order = mapRow(rows[0]);
 
-    // Comparaison timing-safe de l'email (protège contre les attaques par canal auxiliaire)
     const storedEmail = order.shippingAddress?.email?.trim().toLowerCase();
     if (!storedEmail) return null;
 
@@ -230,10 +224,6 @@ export const ordersRepo = {
     }
   },
 
-  /**
-   * Trouve toutes les commandes guest liées à un email.
-   * Utilisé exclusivement par l'auto-claim à l'inscription.
-   */
   async findGuestOrdersByEmail(email) {
     const normalizedEmail = email.trim().toLowerCase();
     const { rows } = await pgPool.query(
@@ -250,17 +240,6 @@ export const ordersRepo = {
   // TRANSFERT — CLAIM (guest → user)
   // ─────────────────────────────────────────────────────────────────────
 
-  /**
-   * Transfère la propriété d'une commande d'un guest vers un utilisateur.
-   *
-   * SÉCURITÉ :
-   * - SELECT ... FOR UPDATE : verrouillage pessimiste (pas de double-claim concurrent)
-   * - Vérification user_id IS NULL : idempotence (un second claim échoue proprement)
-   * - Vérification email : seul le destinataire légitime peut effectuer le transfert
-   *
-   * Dès que la transaction est commitée, user_id != null — toutes les méthodes
-   * "guest" retourneront null pour cette commande sans modification supplémentaire.
-   */
   async transferOwnership(orderId, newUserId, verificationEmail) {
     validateUUID(orderId, 'orderId');
     validateUUID(newUserId, 'newUserId');
@@ -317,24 +296,25 @@ export const ordersRepo = {
   },
 
   /**
+   * Retourne les items d'une commande enrichis de l'image courante de la variante.
+   *
+   * FIX : LEFT JOIN product_variants pour exposer pv.attributes->>'image' via
+   * l'alias `image`. mapRows convertit snake_case → camelCase ; `image` reste `image`.
+   *
    * Accepte un client optionnel pour s'exécuter dans une transaction externe.
-   * Nécessaire pour le webhook Stripe qui confirme le stock et le statut en une seule transaction.
    */
   async listItems(orderId, client = pgPool) {
     validateUUID(orderId, 'orderId');
     const { rows } = await client.query(
-      `SELECT * FROM order_items WHERE order_id = $1`,
+      `SELECT oi.*, pv.attributes->>'image' AS image
+         FROM order_items oi
+         LEFT JOIN product_variants pv ON pv.id = oi.variant_id
+         WHERE oi.order_id = $1`,
       [orderId]
     );
     return mapRows(rows);
   },
 
-  /**
-   * Met à jour le statut de la commande.
-   * Accepte un client optionnel pour s'intégrer dans une transaction externe
-   * (ex : webhook Stripe qui met à jour statut + confirme stock atomiquement).
-   * Quand paymentData est fourni, insère également l'enregistrement de paiement.
-   */
   async updateStatus(orderId, status, paymentData = null, client = pgPool) {
     validateUUID(orderId, 'orderId');
 
@@ -378,27 +358,21 @@ export const ordersRepo = {
   // ADMINISTRATION
   // ─────────────────────────────────────────────────────────────────────
 
-  /**
-     * ADMINISTRATION : Liste toutes les commandes avec filtres, recherche et pagination.
-     */
   async findAll({ status, userId, search, page = 1, limit = 20 } = {}) {
     const offset = (page - 1) * limit;
     const values = [];
     let whereClause = 'WHERE 1=1';
 
-    // 1. FILTRE PAR STATUT (Ignore 'ALL' envoyé par le frontend)
     if (status && status !== 'ALL') {
       values.push(status);
       whereClause += ` AND o.status = $${values.length}`;
     }
 
-    // 2. FILTRE PAR USER ID
     if (userId) {
       values.push(userId);
       whereClause += ` AND o.user_id = $${values.length}`;
     }
 
-    // 3. FILTRE DE RECHERCHE (Numéro de commande, email utilisateur, ou email invité)
     if (search) {
       values.push(`%${search}%`);
       whereClause += ` AND (
@@ -409,17 +383,14 @@ export const ordersRepo = {
         )`;
     }
 
-    // 4. REQUÊTE POUR LE COMPTAGE TOTAL (Pour la pagination)
     const countQuery = `
         SELECT COUNT(*) 
         FROM orders o
         LEFT JOIN users u ON o.user_id = u.id
         ${whereClause}
     `;
-    // On copie le tableau de valeurs car le LIMIT/OFFSET n'y sont pas encore
     const countValues = [...values];
 
-    // 5. REQUÊTE PRINCIPALE AVEC PAGINATION ET TRI
     const query = `
         SELECT o.*, u.email AS user_email
         FROM orders o
@@ -429,7 +400,6 @@ export const ordersRepo = {
         LIMIT $${values.push(limit)} OFFSET $${values.push(offset)}
     `;
 
-    // Exécution en parallèle pour optimiser le temps de réponse
     const [dataResult, countResult] = await Promise.all([
       pgPool.query(query, values),
       pgPool.query(countQuery, countValues)
@@ -448,13 +418,6 @@ export const ordersRepo = {
     };
   },
 
-  /**
-   * Trouve les commandes PENDING qui ont dépassé un certain délai.
-   * Optimisé pour l'index idx_orders_pending_old.
-   *
-   * @param {number} expirationMinutes - Délai en minutes (ex : 1440 pour 24h)
-   * @returns {Promise<Array>} Liste des commandes expirées
-   */
   async findExpiredPendingOrders(expirationMinutes = 30) {
     const { rows } = await pgPool.query(
       `SELECT id
@@ -480,18 +443,6 @@ export const ordersRepo = {
     };
   },
 
-  /** 
-   * ─────────────────────────────────────────────────────────────────────
-   * HISTORIQUE DES VENTES JOURNALIÈRES (pour le graphique dashboard)
-   * ─────────────────────────────────────────────────────────────────────
-   *
-   * Agrège le CA par jour sur les N derniers jours.
-   * Exclut CANCELLED et PENDING : seules les commandes confirmées contribuent au CA.
-   * Les jours sans vente ne sont pas retournés — le frontend gère les trous.
-   *
-   * @param {number} days - Fenêtre temporelle en jours (défaut : 30)
-   * @returns {Promise<Array<{ date: string, revenue: string }>>}
-   */
   async getDailySalesHistory(days = 30) {
     const { rows } = await pgPool.query(
       `SELECT
