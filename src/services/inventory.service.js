@@ -13,8 +13,18 @@ import { HTTP_STATUS } from '../constants/httpStatus.js';
 import { ORDER_STATUS } from '../constants/enums.js';
 
 class InventoryService {
-    // Seuil centralisé ici pour qu'un seul changement impacte alertes et dashboard.
+    /**
+     * Fenêtre d'expiration des commandes PENDING non payées.
+     *
+     * Doit être supérieure au délai d'expiration d'une session Stripe (~30 min)
+     * pour éviter d'annuler une commande dont le paiement est encore en cours.
+     * Le cron inventory-cleanup s'exécute toutes les 15 minutes.
+     */
+    #ORDER_EXPIRATION_MINUTES = 30;
+
+    /** Seuil centralisé ici pour qu'un seul changement impacte alertes et dashboard. */
     #LOW_STOCK_THRESHOLD = 5;
+
     #CACHE_PREFIX = 'stock:variant:';
     #CACHE_TTL = 3600;
 
@@ -23,6 +33,79 @@ class InventoryService {
         InventoryService.instance = this;
         Object.freeze(this);
     }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // HELPERS PRIVÉS
+    // ─────────────────────────────────────────────────────────────────────
+
+    /**
+     * Invalide le cache Redis d'une variante et du produit parent associé.
+     * Fire-and-forget : ne bloque jamais le flux principal.
+     */
+    async #invalidateCache(variantId) {
+        try {
+            await cacheService.delete(`${this.#CACHE_PREFIX}${variantId}`);
+
+            const variant = await productsRepo.findVariantById(variantId);
+            if (variant?.productId) {
+                const product = await productsRepo.findById(variant.productId);
+                if (product) {
+                    await cacheService.deleteMany([
+                        `product:details:${product.id}`,
+                        `product:details:${product.slug}`,
+                        'catalog:list:*',
+                    ]);
+                }
+            }
+        } catch (error) {
+            logError(error, { context: 'InventoryService.invalidateCache', variantId });
+        }
+    }
+
+    /**
+     * Annule une commande et libère atomiquement tout son stock réservé.
+     * Toutes les mutations s'exécutent dans une seule transaction pour garantir
+     * la cohérence en cas d'erreur partielle (ROLLBACK automatique).
+     * L'invalidation de cache se fait hors transaction (fire-and-forget).
+     *
+     * @param {string} orderId - UUID de la commande à annuler
+     */
+    async #cancelOrderAndReleaseStock(orderId) {
+        const client = await pgPool.connect();
+
+        try {
+            await client.query('BEGIN');
+
+            const items = await ordersRepo.listItems(orderId, client);
+
+            for (const item of items) {
+                await inventoryRepo.release(item.variantId, item.quantity, client);
+            }
+
+            await client.query(
+                `UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2`,
+                [ORDER_STATUS.CANCELLED, orderId]
+            );
+
+            await client.query('COMMIT');
+
+            // Invalidation hors transaction pour ne pas bloquer la DB.
+            for (const item of items) {
+                this.#invalidateCache(item.variantId).catch(() => { });
+            }
+
+        } catch (error) {
+            await client.query('ROLLBACK');
+            logError(error, { context: 'InventoryService.cancelOrderAndReleaseStock', orderId });
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // MÉTHODES PUBLIQUES
+    // ─────────────────────────────────────────────────────────────────────
 
     async getAllInventory(params) {
         const { items, total } = await inventoryRepo.findAll(params);
@@ -58,26 +141,6 @@ class InventoryService {
 
         cacheService.set(cacheKey, result, this.#CACHE_TTL).catch(() => { });
         return result;
-    }
-
-    async #invalidateCache(variantId) {
-        try {
-            await cacheService.delete(`${this.#CACHE_PREFIX}${variantId}`);
-
-            const variant = await productsRepo.findVariantById(variantId);
-            if (variant?.productId) {
-                const product = await productsRepo.findById(variant.productId);
-                if (product) {
-                    await cacheService.deleteMany([
-                        `product:details:${product.id}`,
-                        `product:details:${product.slug}`,
-                        'catalog:list:*',
-                    ]);
-                }
-            }
-        } catch (error) {
-            logError(error, { context: 'InventoryService.invalidateCache', variantId });
-        }
     }
 
     async adjustStock(variantId, quantity, reason = 'ADJUSTMENT') {
@@ -129,38 +192,34 @@ class InventoryService {
     }
 
     /**
-     * Libère le stock réservé par des commandes PENDING trop anciennes.
+     * Libère le stock réservé par des commandes PENDING expirées.
+     *
+     * Appelé par le cron inventory-cleanup (toutes les 15 minutes).
+     * Cherche les commandes PENDING de plus de #ORDER_EXPIRATION_MINUTES (30 min).
      * Promise.allSettled garantit que l'échec sur une commande n'empêche pas
      * le traitement des autres.
+     *
+     * @returns {{ processed: number }} Nombre de commandes annulées avec succès
      */
     async cleanupExpiredReservations() {
-        const EXPIRATION_MINUTES = 24 * 60;
-        const expiredOrders = await ordersRepo.findExpiredPendingOrders(EXPIRATION_MINUTES);
+        const expiredOrders = await ordersRepo.findExpiredPendingOrders(
+            this.#ORDER_EXPIRATION_MINUTES
+        );
 
         if (!expiredOrders?.length) return { processed: 0 };
 
-        const client = await pgPool.connect();
-        try {
-            await client.query('BEGIN');
-            for (const order of expiredOrders) {
-                const items = await ordersRepo.listItems(order.id);
-                for (const item of items) {
-                    await inventoryRepo.release(item.variantId, item.quantity, client);
-                    await this.#invalidateCache(item.variantId);
-                }
-                await client.query(
-                    `UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2`,
-                    [ORDER_STATUS.CANCELLED, order.id]
-                );
-            }
-            await client.query('COMMIT');
-            return { processed: expiredOrders.length };
-        } catch (error) {
-            await client.query('ROLLBACK');
-            throw error;
-        } finally {
-            client.release();
+        const results = await Promise.allSettled(
+            expiredOrders.map((order) => this.#cancelOrderAndReleaseStock(order.id))
+        );
+
+        const failed = results.filter((r) => r.status === 'rejected');
+        if (failed.length > 0) {
+            failed.forEach(({ reason }) =>
+                logError(reason, { context: 'InventoryService.cleanupExpiredReservations' })
+            );
         }
+
+        return { processed: expiredOrders.length - failed.length };
     }
 
     async restockVariant(variantId, quantity) {
