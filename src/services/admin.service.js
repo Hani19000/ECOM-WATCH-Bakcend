@@ -40,7 +40,6 @@ class AdminService {
             inventory: {
                 alerts: lowStockCount,
             },
-            // NOUVEAU : On expose le total pour le frontend
             products: {
                 total: productCount,
             },

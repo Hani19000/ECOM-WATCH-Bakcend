@@ -4,7 +4,7 @@
  * Gère la logique métier des utilisateurs : profil, rôles et changement de mot de passe.
  */
 import { usersRepo, rolesRepo } from '../repositories/index.js';
-import { AppError } from '../utils/appError.js';
+import { AppError, BusinessError } from '../utils/appError.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
 import { passwordService } from './password.service.js';
 import { ordersRepo } from '../repositories/orders.repo.js';
@@ -48,10 +48,8 @@ class UserService {
      * Résultat non mis en cache car utilisé en administration (fraîcheur prioritaire).
      */
     async listAllUsers(params = {}) {
-        // 1. On passe les paramètres (search, page...) au repository
         const result = await usersRepo.list(params);
 
-        // 2. On enrichit la liste d'utilisateurs avec leurs rôles
         const usersWithRoles = await Promise.all(
             result.users.map(async (user) => {
                 const roles = await rolesRepo.listUserRoles(user.id);
@@ -59,24 +57,29 @@ class UserService {
             })
         );
 
-        // 3. On retourne l'objet structuré attendu par le contrôleur
         return {
             users: usersWithRoles,
-            pagination: result.pagination
+            pagination: result.pagination,
         };
     }
 
     async deleteUser(targetUserId, currentAdminId) {
-        // SÉCURITÉ 1 : Impossible de se supprimer soi-même
+        // Un administrateur ne peut pas se supprimer lui-même.
         if (targetUserId === currentAdminId) {
-            throw new AppError('Opération interdite : Vous ne pouvez pas supprimer votre propre compte.', HTTP_STATUS.FORBIDDEN);
+            throw new AppError(
+                'Opération interdite : Vous ne pouvez pas supprimer votre propre compte.',
+                HTTP_STATUS.FORBIDDEN
+            );
         }
 
-        // SÉCURITÉ 2 : Impossible de supprimer un autre administrateur
+        // Un administrateur ne peut pas supprimer un autre administrateur.
         const targetUserRoles = await rolesRepo.listUserRoles(targetUserId);
         const isTargetAdmin = targetUserRoles.some((r) => r.name.toUpperCase() === 'ADMIN');
         if (isTargetAdmin) {
-            throw new AppError('Opération interdite : Vous ne pouvez pas supprimer un compte Administrateur.', HTTP_STATUS.FORBIDDEN);
+            throw new AppError(
+                'Opération interdite : Vous ne pouvez pas supprimer un compte Administrateur.',
+                HTTP_STATUS.FORBIDDEN
+            );
         }
 
         const deleted = await usersRepo.deleteById(targetUserId);
@@ -87,32 +90,40 @@ class UserService {
     }
 
     /**
-     * Met à jour les informations du profil utilisateur (prénom, nom, téléphone).
-     * Vérifie l'existence de l'utilisateur avant de renvoyer le résultat.
+     * Met à jour les accès d'un utilisateur (statut actif/bloqué et rôle).
+     * Protégé contre l'auto-modification et la modification d'un autre administrateur.
+     *
+     * @param {string} targetUserId   - UUID de l'utilisateur à modifier
+     * @param {{ role?: string, isActive?: boolean }} privileges - Changements à appliquer
+     * @param {string} currentAdminId - UUID de l'administrateur effectuant la modification
      */
     async updatePrivileges(targetUserId, { role, isActive }, currentAdminId) {
         const user = await usersRepo.findById(targetUserId);
         if (!user) throw new AppError('Utilisateur introuvable', HTTP_STATUS.NOT_FOUND);
 
-        // SÉCURITÉ 1 : Impossible de modifier ses propres privilèges
+        // Un administrateur ne peut pas modifier ses propres accès.
         if (targetUserId === currentAdminId) {
-            throw new AppError('Opération interdite : Vous ne pouvez pas modifier vos propres accès.', HTTP_STATUS.FORBIDDEN);
+            throw new AppError(
+                'Opération interdite : Vous ne pouvez pas modifier vos propres accès.',
+                HTTP_STATUS.FORBIDDEN
+            );
         }
 
         const currentRoles = await rolesRepo.listUserRoles(targetUserId);
         const isAdmin = currentRoles.some((r) => r.name.toUpperCase() === 'ADMIN');
 
-        // SÉCURITÉ 2 : Impossible de bloquer ou rétrograder un autre administrateur
+        // Un administrateur ne peut pas rétrograder ou bloquer un autre administrateur.
         if (isAdmin) {
-            throw new AppError('Opération interdite : Impossible de modifier les accès d\'un autre Administrateur.', HTTP_STATUS.FORBIDDEN);
+            throw new AppError(
+                "Opération interdite : Impossible de modifier les accès d'un autre Administrateur.",
+                HTTP_STATUS.FORBIDDEN
+            );
         }
 
-        // 1. Mise à jour du Statut (Bloqué / Actif)
         if (isActive !== undefined) {
             await usersRepo.setActive(targetUserId, isActive);
         }
 
-        // 2. Mise à jour du Rôle (Admin / User)
         if (role) {
             const targetRoleName = role.toUpperCase();
 
@@ -120,74 +131,17 @@ class UserService {
                 const adminRoleDef = await rolesRepo.findByName('ADMIN');
                 if (adminRoleDef) await rolesRepo.addUserRole(targetUserId, adminRoleDef.id);
             } else if (targetRoleName === 'USER' && isAdmin) {
-                // Note : Ce code ne sera techniquement plus jamais atteint grâce à la "Sécurité 2" au-dessus,
-                // mais on le laisse pour la cohérence logique de la fonction.
-                const adminRoleAssigned = currentRoles.find(r => r.name.toUpperCase() === 'ADMIN');
+                const adminRoleAssigned = currentRoles.find((r) => r.name.toUpperCase() === 'ADMIN');
                 if (adminRoleAssigned) await rolesRepo.removeUserRole(targetUserId, adminRoleAssigned.id);
 
                 const userRoleDef = await rolesRepo.findByName('USER');
-                const hasUserRole = currentRoles.some(r => r.name.toUpperCase() === 'USER');
+                const hasUserRole = currentRoles.some((r) => r.name.toUpperCase() === 'USER');
                 if (userRoleDef && !hasUserRole) await rolesRepo.addUserRole(targetUserId, userRoleDef.id);
             }
         }
 
         await this.#clearUserCache(targetUserId);
         return this.getUserProfile(targetUserId);
-    }
-
-    /**
-     * ADMINISTRATION : Mise à jour des accès utilisateurs.
-     */
-    /**
-         * ADMINISTRATION : Mise à jour des accès utilisateurs.
-         */
-    async updatePrivileges(userId, { role, isActive }) {
-        const user = await usersRepo.findById(userId);
-        if (!user) throw new AppError('Utilisateur introuvable', HTTP_STATUS.NOT_FOUND);
-
-        // 1. Mise à jour du Statut (Bloqué / Actif)
-        if (isActive !== undefined) {
-            await usersRepo.setActive(userId, isActive);
-        }
-
-        // 2. Mise à jour du Rôle (Admin / User)
-        if (role) {
-            // Le frontend envoie 'ADMIN' ou 'USER'
-            const targetRoleName = role.toUpperCase();
-
-            // On récupère les rôles actuels de l'utilisateur
-            const currentRoles = await rolesRepo.listUserRoles(userId);
-
-            // On vérifie (sans tenir compte de la casse) s'il est déjà admin
-            const isAdmin = currentRoles.some(r => r.name.toUpperCase() === 'ADMIN');
-
-            if (targetRoleName === 'ADMIN' && !isAdmin) {
-                // Promotion
-                // On s'assure d'utiliser exactement la casse de la BDD (généralement en majuscules)
-                const adminRoleDef = await rolesRepo.findByName('ADMIN');
-                if (adminRoleDef) {
-                    await rolesRepo.addUserRole(userId, adminRoleDef.id);
-                }
-            } else if (targetRoleName === 'USER' && isAdmin) {
-                // Rétrogradation
-                const adminRoleAssigned = currentRoles.find(r => r.name.toUpperCase() === 'ADMIN');
-                if (adminRoleAssigned) {
-                    await rolesRepo.removeUserRole(userId, adminRoleAssigned.id);
-                }
-
-                const userRoleDef = await rolesRepo.findByName('USER');
-                const hasUserRole = currentRoles.some(r => r.name.toUpperCase() === 'USER');
-                if (userRoleDef && !hasUserRole) {
-                    await rolesRepo.addUserRole(userId, userRoleDef.id);
-                }
-            }
-        }
-
-        // 3. Nettoyage immédiat du cache
-        await this.#clearUserCache(userId);
-
-        // 4. On retourne le profil complet mis à jour
-        return this.getUserProfile(userId);
     }
 
     /**
@@ -229,9 +183,8 @@ class UserService {
                 entry.salt
             );
             if (isAlreadyUsed) {
-                throw new AppError(
-                    'Vous ne pouvez pas réutiliser un de vos anciens mots de passe.',
-                    HTTP_STATUS.BAD_REQUEST
+                throw new BusinessError(
+                    'Vous ne pouvez pas réutiliser un de vos anciens mots de passe.'
                 );
             }
         }

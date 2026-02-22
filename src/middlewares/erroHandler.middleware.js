@@ -24,7 +24,7 @@ const handlePostgresError = (err) => {
 
     // 23503 : violation de clé étrangère — la ressource référencée n'existe pas
     if (err.code === '23503') {
-        return new AppError("Opération impossible : ressource liée introuvable.", HTTP_STATUS.BAD_REQUEST);
+        return new AppError('Opération impossible : ressource liée introuvable.', HTTP_STATUS.BAD_REQUEST);
     }
 
     // 22P02 : représentation invalide — ex: UUID malformé dans les paramètres d'URL
@@ -50,7 +50,7 @@ const sendErrorDev = (err, res) => {
 
 /**
  * En production, on distingue deux cas :
- * - Erreur opérationnelle (AppError) : on peut exposer le message en toute sécurité
+ * - Erreur opérationnelle (AppError) : on peut exposer le message en toute sécurité.
  * - Erreur inattendue (bug) : on masque les détails pour ne pas exposer l'architecture interne.
  *   Sentry (initialisé dans instruments.js) capture automatiquement ces erreurs via son
  *   intégration Express — aucun appel Sentry explicite n'est nécessaire ici.
@@ -62,7 +62,7 @@ const sendErrorProd = (err, res) => {
             message: err.message,
         });
     } else {
-        logError('Unhandled error', err);
+        logError(err, { context: 'Unhandled error' });
         res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).json({
             status: 'error',
             message: 'Une erreur interne est survenue.',

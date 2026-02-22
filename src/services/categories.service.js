@@ -6,7 +6,7 @@
  */
 import { categoriesRepo } from '../repositories/categories.repo.js';
 import { cacheService } from './cache.service.js';
-import { AppError } from '../utils/appError.js';
+import { AppError, ValidationError, ConflictError } from '../utils/appError.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
 
 class CategoryService {
@@ -32,19 +32,19 @@ class CategoryService {
 
     async createCategory({ name, slug }) {
         if (!name || name.trim().length < 2 || name.trim().length > 50) {
-            throw new AppError('Nom de catégorie invalide (2-50 caractères).', HTTP_STATUS.BAD_REQUEST);
+            throw new ValidationError('Nom de catégorie invalide (2-50 caractères).');
         }
 
         const sanitizedSlug = slug.trim().toLowerCase();
         const slugRegex = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
         if (!slugRegex.test(sanitizedSlug)) {
-            throw new AppError('Format du slug invalide.', HTTP_STATUS.BAD_REQUEST);
+            throw new ValidationError('Format du slug invalide.');
         }
 
         const existingCategory = await categoriesRepo.findBySlug(sanitizedSlug);
         if (existingCategory) {
-            throw new AppError(`Le slug '${sanitizedSlug}' existe déjà.`, HTTP_STATUS.CONFLICT);
+            throw new ConflictError(`Le slug '${sanitizedSlug}' existe déjà.`);
         }
 
         const newCategory = await categoriesRepo.create({
@@ -61,7 +61,7 @@ class CategoryService {
         await Promise.all(
             categoryIds.map((catId) => categoriesRepo.linkProductToCategory(productId, catId))
         );
-        // Le cache produit est invalidé car ses catégories ont changé
+        // Le cache produit est invalidé car ses catégories ont changé.
         await cacheService.delete(`product:details:${productId}`);
     }
 
@@ -76,7 +76,7 @@ class CategoryService {
     async deleteCategory(id) {
         const linkedProducts = await categoriesRepo.listByProductId(id);
         if (linkedProducts?.length > 0) {
-            throw new AppError('Action impossible : catégorie utilisée.', HTTP_STATUS.CONFLICT);
+            throw new ConflictError('Action impossible : catégorie utilisée.');
         }
 
         const success = await categoriesRepo.delete(id);

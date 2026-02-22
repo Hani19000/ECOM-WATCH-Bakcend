@@ -4,16 +4,15 @@
  * Gère le calcul des taxes selon les règles fiscales par pays/région.
  * Centralisé pour faciliter les mises à jour réglementaires sans toucher à la logique métier.
  */
-import { AppError } from '../utils/appError.js';
-import { HTTP_STATUS } from '../constants/httpStatus.js';
+import { ValidationError } from '../utils/appError.js';
 
 class TaxService {
     // Taux de TVA par pays — centralisés ici pour faciliter les ajustements législatifs.
     #taxRates = {
         France: {
             standard: 20.0,
-            reduced: 5.5,        // Livres, alimentation de base
-            intermediate: 10.0,  // Restauration, transport
+            reduced: 5.5,       // Livres, alimentation de base
+            intermediate: 10.0, // Restauration, transport
         },
         Belgium: {
             standard: 21.0,
@@ -62,7 +61,7 @@ class TaxService {
      * Pour l'UE : applique le taux du pays de destination (règle post-Brexit).
      */
     calculateTax(subtotal, country, taxCategory = 'standard') {
-        if (subtotal <= 0) throw new AppError('Montant invalide', HTTP_STATUS.BAD_REQUEST);
+        if (subtotal <= 0) throw new ValidationError('Montant invalide');
 
         const countryRates = this.getCountryRates(country);
         const rate = countryRates[taxCategory] || countryRates.standard;

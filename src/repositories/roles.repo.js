@@ -81,7 +81,7 @@ export const rolesRepo = {
       `SELECT COUNT(*) FROM user_roles WHERE role_id = $1`,
       [roleId]
     );
-    return parseInt(rows[0].count);
+    return parseInt(rows[0].count, 10);
   },
 
   /**

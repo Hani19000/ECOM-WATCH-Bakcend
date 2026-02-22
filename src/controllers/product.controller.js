@@ -1,5 +1,8 @@
 /**
  * @module Controller/Product
+ *
+ * Orchestre les opérations du catalogue produits et de leurs variantes.
+ * La logique métier (prix, stock, images) est déléguée au service.
  */
 import { productService } from '../services/products.service.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
@@ -14,7 +17,7 @@ class ProductController {
             results: result.data.length,
             data: {
                 products: result.data,
-                pagination: result.pagination
+                pagination: result.pagination,
             },
         });
     });
@@ -31,15 +34,12 @@ class ProductController {
 
     /**
      * Crée un produit avec sa première variante et son image Cloudinary.
+     * L'URL image est fournie par le middleware handleUpload via req.file.path.
      */
     create = asyncHandler(async (req, res) => {
-        // 1. Extraction de l'URL Cloudinary ajoutée par ton middleware handleUpload
         const imageUrl = req.file ? req.file.path : null;
-
-        // 2. Récupération des données (rappel : gère le JSON.parse si envoyé via FormData)
         const { variant, ...productData } = req.body;
 
-        // 3. On passe l'imageUrl au service pour qu'il l'insère dans la transaction
         const product = await productService.createProductWithVariant(
             productData,
             variant,
@@ -53,7 +53,6 @@ class ProductController {
     });
 
     update = asyncHandler(async (req, res) => {
-        // Optionnel : Gérer la mise à jour de l'image ici aussi si req.file existe
         const updateData = { ...req.body };
         if (req.file) updateData.image = req.file.path;
 
@@ -73,17 +72,15 @@ class ProductController {
 
     addVariant = asyncHandler(async (req, res) => {
         const imageUrl = req.file ? req.file.path : null;
-
-        // On récupère 'size' depuis le body
         const { size, sku, price, attributes, initialStock } = req.body;
 
         const variantData = {
             sku,
             price,
             size,
-            initialStock, // On passe la taille explicitement
+            initialStock,
             attributes,
-            image: imageUrl
+            image: imageUrl,
         };
 
         const variant = await productService.addVariantToProduct(req.params.productId, variantData);
@@ -99,7 +96,7 @@ class ProductController {
 
         res.status(HTTP_STATUS.OK).json({
             status: 'success',
-            data: filters
+            data: filters,
         });
     });
 

@@ -13,28 +13,18 @@ process.on('uncaughtException', (err) => {
 });
 
 const startServer = async () => {
-    // 1. On définit le port (Render fournit process.env.PORT)
-    const port = ENV.server.port || 3000;
+    const port = ENV.server.port;
 
-    // 2. On démarre l'écoute HTTP immédiatement. 
-    // Cela permet à Render de valider le déploiement même si la DB met du temps.
+    // Le serveur écoute avant la connexion DB pour que Render valide le déploiement
+    // même si la base met du temps à répondre.
     const server = app.listen(port, '0.0.0.0', () => {
         logInfo(`Serveur en ligne [${ENV.server.nodeEnv}] sur le port ${port}`);
     });
 
     try {
-        // 3. Connexion à la base de données après le démarrage du serveur
-        logInfo('Tentative de connexion à PostgreSQL...');
         await connectPostgres();
-        logInfo('Connexion PostgreSQL établie avec succès');
-
     } catch (error) {
-        // Si la DB échoue, on loggue l'erreur. 
-        // En prod, on peut choisir de crash (process.exit) ou de continuer en mode dégradé.
         logError(error, { step: 'database_connection_startup' });
-
-        // Si la DB est critique au démarrage
-        // server.close(() => process.exit(1));
     }
 
     /**
@@ -42,7 +32,6 @@ const startServer = async () => {
      */
     process.on('unhandledRejection', (err) => {
         logError(err, { event: 'unhandledRejection' });
-        // On ferme le serveur proprement avant de quitter
         server.close(() => {
             logInfo('Serveur fermé suite à unhandledRejection');
             process.exit(1);

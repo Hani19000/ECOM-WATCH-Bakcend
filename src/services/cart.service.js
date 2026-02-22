@@ -6,9 +6,8 @@
  */
 import { cartsRepo, inventoryRepo, productsRepo } from '../repositories/index.js';
 import { cacheService } from './cache.service.js';
-import { AppError } from '../utils/appError.js';
+import { AppError, ValidationError } from '../utils/appError.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
-import { logInfo } from '../utils/logger.js';
 
 class CartService {
     constructor() {
@@ -23,14 +22,8 @@ class CartService {
         return `cart:${cartId}`;
     }
 
-    /**
-     * Invalide le cache d'un panier spécifique.
-     * À appeler après chaque modification (Add, Update, Remove).
-     */
     async #invalidateCartCache(cartId) {
-        const key = this.#getCacheKey(cartId);
-        await cacheService.delete(key);
-        logInfo(`Cache invalidé pour le panier : ${cartId}`);
+        await cacheService.delete(this.#getCacheKey(cartId));
     }
 
     // --- MÉTHODES DE LECTURE ---
@@ -42,14 +35,11 @@ class CartService {
     async getFullCart(cartId) {
         const cacheKey = this.#getCacheKey(cartId);
 
-        // 1. Tenter de récupérer depuis Redis
         const cachedCart = await cacheService.get(cacheKey);
         if (cachedCart) return cachedCart;
 
-        // 2. Sinon, récupération SQL
         const items = await cartsRepo.listItems(cartId);
 
-        // 3. Calculs métier (Memory-based)
         const subTotal = items.reduce((sum, item) => sum + (parseFloat(item.price) * item.quantity), 0);
         const itemCount = items.reduce((sum, item) => sum + item.quantity, 0);
 
@@ -59,18 +49,17 @@ class CartService {
             summary: {
                 subTotal: parseFloat(subTotal.toFixed(2)),
                 itemCount,
-                currency: 'EUR'
+                currency: 'EUR',
             },
         };
 
-        // 4. Stockage Redis (TTL long car le panier est persistant tant qu'on ne le modifie pas)
-        await cacheService.set(cacheKey, result, 86400); // 24 heures
+        // TTL long car le panier est persistant tant qu'on ne le modifie pas.
+        await cacheService.set(cacheKey, result, 86400);
 
         return result;
     }
 
     async getCartByUserId(userId) {
-        // Cette étape reste en SQL car elle est très légère (SELECT id FROM carts...)
         const cart = await cartsRepo.getOrCreate(userId);
         return await this.getFullCart(cart.id);
     }
@@ -80,7 +69,7 @@ class CartService {
     async addToCart(userId, variantId, quantity) {
         const cart = await cartsRepo.getOrCreate(userId);
 
-        // 1. Validation Produit & Stock (Toujours en temps réel via SQL)
+        // Validation stock en temps réel (SQL) — pas de cache pour la disponibilité.
         const variant = await productsRepo.findVariantById(variantId);
         if (!variant) throw new AppError('Produit introuvable', HTTP_STATUS.NOT_FOUND);
 
@@ -88,13 +77,11 @@ class CartService {
         const available = inventory?.availableStock ?? 0;
 
         if (available < quantity) {
-            throw new AppError(`Stock insuffisant. Disponible : ${available}`, HTTP_STATUS.BAD_REQUEST);
+            throw new ValidationError(`Stock insuffisant. Disponible : ${available}`);
         }
 
-        // 2. Écriture SQL
         const result = await cartsRepo.addItem({ cartId: cart.id, variantId, quantity });
 
-        // 3. Invalidation Cache
         await this.#invalidateCartCache(cart.id);
 
         return result;
@@ -107,20 +94,15 @@ class CartService {
         const item = items.find((i) => String(i.id) === String(itemId));
         if (!item) throw new AppError('Article non trouvé dans le panier', HTTP_STATUS.NOT_FOUND);
 
-        // Validation Stock avant update
         const inventory = await inventoryRepo.findByVariantId(item.variantId);
         const available = inventory?.availableStock ?? 0;
 
         if (available < newQuantity) {
-            throw new AppError(
-                `Stock insuffisant : seulement ${available} disponibles.`,
-                HTTP_STATUS.BAD_REQUEST
-            );
+            throw new ValidationError(`Stock insuffisant : seulement ${available} disponibles.`);
         }
 
         const result = await cartsRepo.updateItemQuantity(itemId, newQuantity);
 
-        // Invalidation Cache
         await this.#invalidateCartCache(cart.id);
 
         return result;
@@ -130,13 +112,12 @@ class CartService {
         const cart = await cartsRepo.getOrCreate(userId);
         const items = await cartsRepo.listItems(cart.id);
 
-        // Sécurité : Vérifier que l'item appartient bien au panier de l'user
+        // Vérification de propriété avant suppression.
         const itemExists = items.some((i) => String(i.id) === String(itemId));
         if (!itemExists) throw new AppError("Cet article n'existe pas dans votre panier", HTTP_STATUS.NOT_FOUND);
 
         await cartsRepo.removeItem(itemId);
 
-        // Invalidation Cache
         await this.#invalidateCartCache(cart.id);
 
         return true;
@@ -152,18 +133,13 @@ class CartService {
         const userCart = await cartsRepo.getOrCreate(userId);
         const guestItems = await cartsRepo.listItems(guestCartId);
 
-        // On utilise addToCart en boucle qui gère déjà les stocks et l'invalidation
-        // Note: On pourrait optimiser pour ne faire qu'une invalidation à la fin, 
-        // mais pour une fusion (rare), la sécurité prévaut.
+        // addToCart gère déjà les stocks et l'invalidation à chaque itération.
         for (const item of guestItems) {
             await this.addToCart(userId, item.variantId, item.quantity);
         }
 
         await cartsRepo.delete(guestCartId);
-
-        // On nettoie le cache du panier invité (qui n'existe plus) par précaution
         await this.#invalidateCartCache(guestCartId);
-        // Le cache du User a été invalidé par les appels successifs à addToCart
 
         return this.getFullCart(userCart.id);
     }

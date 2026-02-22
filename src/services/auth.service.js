@@ -15,7 +15,7 @@ import { passwordService } from './password.service.js';
 import { tokenService } from './token.service.js';
 import { sessionService } from './session.service.js';
 import { orderService } from './orders.service.js';
-import { AppError } from '../utils/appError.js';
+import { AppError, ConflictError } from '../utils/appError.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
 import { pgPool } from '../config/database.js';
 import { notificationService } from './notifications/notification.service.js';
@@ -32,13 +32,9 @@ class AuthService {
      * Factorise la génération des tokens et la persistance de session.
      * Partagée entre register et login pour rester DRY.
      *
-     * CORRECTION : `roles` est maintenant inclus dans l'objet `user` retourné.
-     * Sans cela, le frontend ne connaît pas les rôles au moment du login —
-     * il les obtient seulement après un refresh (reload page), ce qui empêche
-     * l'affichage conditionnel basé sur les rôles (ex : lien dashboard admin).
-     *
-     * Le paramètre `user` contient déjà les rôles (hydratés par login/register)
-     * — ils étaient simplement strippés dans le return précédent.
+     * `roles` est inclus dans l'objet `user` retourné pour que le frontend
+     * puisse appliquer l'affichage conditionnel (ex : lien dashboard admin)
+     * dès le login, sans attendre un refresh.
      *
      * @param {{ id, email, firstName, roles: string[] }} user
      */
@@ -53,7 +49,7 @@ class AuthService {
                 id: user.id,
                 email: user.email,
                 firstName: user.firstName,
-                roles: user.roles ?? [],   // ← CORRECTION : roles inclus
+                roles: user.roles ?? [],
             },
             accessToken,
             refreshToken,
@@ -73,7 +69,7 @@ class AuthService {
     async register({ email, password, firstName, lastName }) {
         const existing = await usersRepo.findByEmail(email);
         if (existing) {
-            throw new AppError('Email déjà utilisé', HTTP_STATUS.CONFLICT);
+            throw new ConflictError('Email déjà utilisé');
         }
 
         const role = await rolesRepo.findByName('USER');
@@ -160,7 +156,6 @@ class AuthService {
             logError(new Error(claimResult.error), { context: 'auto-claim login', userId: user.id });
         }
 
-        // Création de la session
         const session = await this.#createAuthSession(userWithRoles);
 
         return {
@@ -179,9 +174,6 @@ class AuthService {
         await sessionService.deleteSession(refreshToken);
     }
 
-    /**
-     * Renouvellement de l'access token.
-     */
     async refreshAccessToken(refreshToken) {
         const payload = tokenService.verifyRefreshToken(refreshToken);
         if (!payload) {
@@ -218,6 +210,7 @@ class AuthService {
 
     /**
      * Notification d'inscription en fire-and-forget.
+     * L'inscription ne doit jamais échouer à cause d'un problème SMTP.
      */
     #sendRegistrationNotification(user) {
         try {

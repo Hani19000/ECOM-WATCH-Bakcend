@@ -76,7 +76,6 @@ class UserController {
      * ADMINISTRATION : Liste tous les comptes utilisateurs avec filtres et pagination.
      */
     getAllUsers = asyncHandler(async (req, res) => {
-        // NOUVEAU : On extrait les paramètres de requête et on les passe au service
         const queryParams = {
             search: req.query.search || null,
             page: parseInt(req.query.page, 10) || 1,
@@ -89,28 +88,31 @@ class UserController {
             status: 'success',
             data: {
                 users: result.users || result || [],
-                pagination: result.pagination || null
+                pagination: result.pagination || null,
             },
         });
     });
 
     /**
-         * ADMINISTRATION : Supprime un compte utilisateur.
-         */
+     * ADMINISTRATION : Supprime un compte utilisateur.
+     * L'ID de l'admin courant est transmis au service pour prévenir l'auto-suppression.
+     */
     deleteUser = asyncHandler(async (req, res) => {
-        // AJOUT : On passe l'ID de l'admin actuel (req.user.id) au service
         await userService.deleteUser(req.params.id, req.user.id);
         res.status(HTTP_STATUS.NO_CONTENT).send();
     });
 
     /**
      * ADMINISTRATION : Met à jour le rôle et/ou le statut (isActive) d'un compte.
+     * L'ID de l'admin courant est transmis au service pour prévenir l'auto-modification.
      */
     updatePrivileges = asyncHandler(async (req, res) => {
         const { role, isActive } = req.body;
-
-        // AJOUT : On passe l'ID de l'admin actuel (req.user.id) au service
-        const updatedUser = await userService.updatePrivileges(req.params.id, { role, isActive }, req.user.id);
+        const updatedUser = await userService.updatePrivileges(
+            req.params.id,
+            { role, isActive },
+            req.user.id
+        );
 
         res.status(HTTP_STATUS.OK).json({
             status: 'success',

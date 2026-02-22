@@ -1,13 +1,6 @@
 -- ================================================================
 -- INITIALISATION POSTGRESQL — ECOM WATCH
 -- ================================================================
--- CORRECTIONS APPLIQUÉES :
---   - order_status_enum enrichi (PROCESSING, REFUNDED ajoutés)
---   - Séquence order_number_seq supprimée (remplacée par trigger VARCHAR)
---   - Index redondants supprimés (email UNIQUE inclut l'index, etc.)
---   - view_inventory_status définie UNE seule fois (version finale)
---   - Colonnes/migrations dupliquées nettoyées
--- ================================================================
 
 -- ================================================================
 -- EXTENSIONS
@@ -20,7 +13,6 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto"; -- Pour gen_random_uuid() natif
 -- ================================================================
 CREATE TYPE user_role_enum AS ENUM ('USER', 'ADMIN');
 
--- ✅ FIX : PROCESSING et REFUNDED ajoutés pour correspondre au frontend
 -- (GuestOrdersList.jsx, OrderHistory.jsx utilisent ces deux statuts)
 CREATE TYPE order_status_enum AS ENUM (
     'PENDING',
@@ -63,7 +55,6 @@ CREATE TABLE users (
     updated_at    TIMESTAMP DEFAULT NOW()
 );
 
--- ✅ PAS d'idx_users_email ici : la contrainte UNIQUE crée déjà un index B-tree identique
 
 CREATE TRIGGER update_users_updated_at
     BEFORE UPDATE ON users
@@ -100,7 +91,6 @@ CREATE TABLE refresh_tokens (
 CREATE INDEX idx_refresh_tokens_user_id ON refresh_tokens(user_id);
 
 -- Index pour le nettoyage des tokens expirés (cron quotidien)
--- ✅ FIX : pas de NOW() dans la condition partielle (fonction volatile = rejetée par PostgreSQL)
 CREATE INDEX idx_refresh_tokens_expires ON refresh_tokens(expires_at);
 
 -- ================================================================
@@ -116,8 +106,6 @@ CREATE TABLE products (
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
-
--- ✅ PAS d'idx_products_slug : UNIQUE inclut déjà l'index
 
 CREATE TRIGGER update_products_updated_at
     BEFORE UPDATE ON products
@@ -135,7 +123,7 @@ CREATE TABLE product_variants (
 
 COMMENT ON COLUMN product_variants.weight IS 'Poids en kg (utilisé pour calcul des frais de port)';
 
--- ✅ PAS d'idx_product_variants_product_sku sur product_id : couvert par le FK index implicite de PostgreSQL
+-- PAS d'idx_product_variants_product_sku sur product_id : couvert par le FK index implicite de PostgreSQL
 CREATE INDEX idx_product_variants_product ON product_variants(product_id);
 
 -- ================================================================
@@ -155,7 +143,7 @@ CREATE TABLE inventory (
     )
 );
 
--- ✅ PAS d'idx_inventory_stock sur available_stock :
+-- PAS d'idx_inventory_stock sur available_stock :
 -- Les requêtes cherchent par variant_id (PK) pour réserver/libérer du stock.
 -- Un index sur available_stock est inutile (jamais utilisé en filtre principal).
 
@@ -301,7 +289,6 @@ CREATE INDEX idx_addresses_user_id ON addresses(user_id);
 -- ORDERS
 -- ================================================================
 
--- ✅ FIX : Séquence order_number_seq SUPPRIMÉE.
 -- Le trigger generate_order_number() génère le numéro au format VARCHAR 'ORD-YYYY-XXXXXXXXXX'.
 -- La séquence BIGINT n'était jamais utilisée (le trigger la court-circuitait).
 -- order_number est déclaré VARCHAR directement, sans DEFAULT de séquence.
@@ -358,7 +345,7 @@ CREATE TRIGGER update_orders_updated_at
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- ─── Index orders ────────────────────────────────────────────────────────────
--- ✅ Les index composites (user+status, user+created) en fichier 002 couvrent
+-- Les index composites (user+status, user+created) en fichier 002 couvrent
 --    les cas d'usage courants. Ici on garde uniquement ce qui est nécessaire
 --    dès le départ et non couvert par 002.
 
@@ -374,7 +361,7 @@ COMMENT ON INDEX idx_orders_guest_email IS
 -- Index pour le webhook Stripe (recherche par order_number dans les metadata)
 CREATE INDEX idx_orders_number ON orders(order_number);
 
--- ✅ PAS de idx_orders_shipping_method : 3 valeurs possibles = sélectivité < 5%,
+-- PAS de idx_orders_shipping_method : 3 valeurs possibles = sélectivité < 5%,
 --    PostgreSQL choisit le seq scan. Inutile.
 
 -- ================================================================
@@ -445,7 +432,7 @@ CREATE INDEX idx_shipments_order ON shipments(order_id);
 
 -- ================================================================
 -- VUE INVENTAIRE — VERSION UNIQUE ET FINALE
--- ✅ FIX : Définie une seule fois (3 DROP/CREATE dans la version originale)
+-- FIX : Définie une seule fois (3 DROP/CREATE dans la version originale)
 -- ================================================================
 CREATE VIEW view_inventory_status AS
 SELECT

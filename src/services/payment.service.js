@@ -12,14 +12,20 @@
  * Hors-scope (délégué à OrderService) :
  * - Annulation de commande et libération de stock
  */
-import { ordersRepo, inventoryRepo, paymentsRepo, usersRepo } from '../repositories/index.js';
-import { productsRepo } from '../repositories/index.js';
+import {
+    ordersRepo,
+    inventoryRepo,
+    paymentsRepo,
+    usersRepo,
+    productsRepo,
+} from '../repositories/index.js';
 import { orderService } from './orders.service.js';
 import { notificationService } from './notifications/notification.service.js';
-import { AppError } from '../utils/appError.js';
+import { AppError, ValidationError } from '../utils/appError.js';
 import { cacheService } from './cache.service.js';
 import { pgPool } from '../config/database.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
+import { ORDER_STATUS, PAYMENT_STATUS } from '../constants/enums.js';
 import Stripe from 'stripe';
 import { ENV } from '../config/environment.js';
 import { logError, logInfo } from '../utils/logger.js';
@@ -57,11 +63,11 @@ class PaymentService {
             );
         }
 
-        if (order.status === 'PAID') {
+        if (order.status === ORDER_STATUS.PAID) {
             throw new AppError('Cette commande a déjà été payée', HTTP_STATUS.BAD_REQUEST);
         }
 
-        if (order.status === 'CANCELLED') {
+        if (order.status === ORDER_STATUS.CANCELLED) {
             throw new AppError('Cette commande a été annulée', HTTP_STATUS.BAD_REQUEST);
         }
 
@@ -106,7 +112,7 @@ class PaymentService {
             orderId: order.id,
             provider: 'STRIPE',
             paymentIntentId: session.id,
-            status: 'PENDING',
+            status: PAYMENT_STATUS.PENDING,
             amount: order.totalAmount,
         });
 
@@ -126,10 +132,7 @@ class PaymentService {
                 ENV.stripe?.webhookSecret
             );
         } catch (err) {
-            throw new AppError(
-                `Webhook signature verification failed: ${err.message}`,
-                HTTP_STATUS.BAD_REQUEST
-            );
+            throw new ValidationError(`Webhook signature verification failed: ${err.message}`);
         }
 
         switch (event.type) {
@@ -168,7 +171,7 @@ class PaymentService {
 
             await ordersRepo.updateStatus(
                 orderId,
-                'PAID',
+                ORDER_STATUS.PAID,
                 {
                     provider: 'STRIPE',
                     paymentIntentId: session.payment_intent,
@@ -191,14 +194,14 @@ class PaymentService {
                 this._invalidateProductCache(item.variantId).catch(() => { });
             }
 
-            // Notifications hors transaction pour ne pas bloquer la DB
+            // Notifications hors transaction pour ne pas bloquer la DB.
             this._triggerPostPaymentNotifications(session, orderId).catch((err) =>
-                logError(err, { context: 'notification post-paiement', orderId })
+                logError(err, { context: 'PaymentService.triggerPostPaymentNotifications', orderId })
             );
 
         } catch (error) {
             await client.query('ROLLBACK');
-            logError(error, { context: 'handleCheckoutCompleted', orderId });
+            logError(error, { context: 'PaymentService.handleCheckoutCompleted', orderId });
             throw error;
         } finally {
             client.release();
@@ -211,8 +214,6 @@ class PaymentService {
      * Déclencheurs :
      * - Stripe expire automatiquement la session après ~30 minutes d'inactivité
      * - L'utilisateur ferme l'onglet sans payer
-     *
-     * @param {Object} session - Objet session Stripe (checkout.session.expired)
      */
     async _handleCheckoutExpired(session) {
         const orderId = session.metadata?.orderId;
@@ -220,23 +221,21 @@ class PaymentService {
 
         const order = await ordersRepo.findById(orderId);
 
-        // Idempotence : si la commande est déjà traitée, on ignore l'événement
-        if (!order || order.status === 'PAID' || order.status === 'CANCELLED') {
+        // Idempotence : si la commande est déjà traitée, on ignore l'événement.
+        if (!order || order.status === ORDER_STATUS.PAID || order.status === ORDER_STATUS.CANCELLED) {
             logInfo(
                 `[Webhook] Session expirée ignorée — commande ${orderId} déjà en statut ${order?.status}`
             );
             return;
         }
 
-        // Délégation à OrderService : responsable du cycle de vie de la commande
+        // Délégation à OrderService : responsable du cycle de vie de la commande.
         await orderService.cancelOrderAndReleaseStock(orderId, 'checkout.session.expired');
     }
 
     /**
      * Invalide le cache Redis d'un produit à partir d'un variantId.
      * Récupère l'id et le slug du produit parent pour cibler les deux clés de cache.
-     *
-     * @param {string} variantId - UUID de la variante achetée
      */
     async _invalidateProductCache(variantId) {
         try {
@@ -252,13 +251,10 @@ class PaymentService {
                 }
             }
         } catch (error) {
-            logError(error, { context: 'PaymentService invalidateProductCache', variantId });
+            logError(error, { context: 'PaymentService.invalidateProductCache', variantId });
         }
     }
 
-    /**
-     * Envoie un email de confirmation pour un paiement guest.
-     */
     async _sendGuestOrderConfirmation(email, orderData) {
         try {
             const { emailService } = await import('./notifications/email.service.js');
@@ -266,13 +262,10 @@ class PaymentService {
             await service.sendOrderConfirmation(email, orderData);
             logInfo(`Email de confirmation envoyé - orderId: ${orderData.id}`);
         } catch (error) {
-            logError(error, { action: 'sendGuestOrderConfirmation', orderId: orderData.id });
+            logError(error, { context: 'PaymentService.sendGuestOrderConfirmation', orderId: orderData.id });
         }
     }
 
-    /**
-     * Gère l'échec d'un paiement.
-     */
     async _handlePaymentFailed(paymentIntent) {
         const orderId = paymentIntent.metadata?.orderId;
         if (!orderId) return;
@@ -297,7 +290,7 @@ class PaymentService {
                     HTTP_STATUS.FORBIDDEN
                 );
             }
-            return order.status || 'PENDING';
+            return order.status || ORDER_STATUS.PENDING;
         }
 
         const orderEmail = order.shippingAddress?.email;
@@ -334,7 +327,7 @@ class PaymentService {
         }
 
         logInfo(`Vérification statut guest autorisée - orderId: ${orderId}`);
-        return order.status || 'PENDING';
+        return order.status || ORDER_STATUS.PENDING;
     }
 
     async getPaymentHistory(orderId) {

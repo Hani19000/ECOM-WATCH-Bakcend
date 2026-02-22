@@ -10,21 +10,13 @@
  *  - Les rejets de promesses non gérés (unhandledRejection)
  *  - Les erreurs propagées via le middleware d'erreur Express
  */
-
-
-// src/config/instruments.js
-// src/config/instruments.js
-import * as Sentry from "@sentry/node";
-import { nodeProfilingIntegration } from "@sentry/profiling-node";
-import 'dotenv/config'; // Assure-toi que dotenv est chargé ici aussi !
+import * as Sentry from '@sentry/node';
+import { nodeProfilingIntegration } from '@sentry/profiling-node';
+import 'dotenv/config';
 
 Sentry.init({
-    dsn: process.env.SENTRY_DSN, // Utilise la variable du .env
-    integrations: [
-        nodeProfilingIntegration(),
-    ],
+    dsn: process.env.SENTRY_DSN,
+    integrations: [nodeProfilingIntegration()],
     tracesSampleRate: 1.0,
     profilesSampleRate: 1.0,
 });
-
-console.log("Sentry : Initialisation du SDK terminée");

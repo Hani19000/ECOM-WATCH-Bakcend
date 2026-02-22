@@ -2,14 +2,14 @@
  * @module Jobs/Cron/Inventory
  *
  * Libère le stock des paniers abandonnés.
- * Fréquence : toutes les heures.
+ * Fréquence : toutes les 15 minutes.
  */
 import { inventoryService } from '../../services/inventory.service.js';
 import { logInfo, logError } from '../../utils/logger.js';
 
 export const inventoryCleanupJob = {
     name: 'inventory-cleanup',
-    schedule: '0 * * * *',
+    schedule: '*/15 * * * *',
 
     async execute() {
         const result = await inventoryService.cleanupExpiredReservations().catch((error) => {

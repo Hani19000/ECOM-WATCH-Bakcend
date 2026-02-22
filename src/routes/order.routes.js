@@ -14,8 +14,7 @@ import { optionalAuth } from '../middlewares/optionalAuth.middleware.js';
 import { restrictTo } from '../middlewares/role.middleware.js';
 import { trackingGuestLimiter } from '../config/security.js';
 import { validateRequired, validateEmail, validateUUID } from '../utils/validation.js';
-import { AppError } from '../utils/appError.js';
-import { HTTP_STATUS } from '../constants/httpStatus.js';
+import { ValidationError } from '../utils/appError.js';
 
 const router = Router();
 
@@ -45,7 +44,7 @@ router.post(
         validateEmail(req.body.email);
 
         if (!ORDER_NUMBER_REGEX.test(req.body.orderNumber)) {
-            throw new AppError('Format de numéro de commande invalide', HTTP_STATUS.BAD_REQUEST);
+            throw new ValidationError('Format de numéro de commande invalide');
         }
 
         next();
@@ -88,6 +87,21 @@ router.get(
 );
 
 /**
+ * POST /api/v1/orders/:orderId/cancel
+ * Annule une commande PENDING et libère le stock réservé.
+ * Accessible en mode guest (avec ?email= ou body.email) et authentifié.
+ */
+router.post(
+    '/:orderId/cancel',
+    optionalAuth,
+    (req, _res, next) => {
+        validateUUID(req.params.orderId, 'orderId');
+        next();
+    },
+    orderController.cancelOrder
+);
+
+/**
  * POST /api/v1/orders/:orderId/claim
  * Rattache une commande guest au compte de l'utilisateur connecté.
  * Dès que le claim réussit, la commande devient invisible pour tout accès guest.
@@ -108,27 +122,6 @@ router.post(
  * PATCH /api/v1/orders/:orderId/status
  * ADMINISTRATION : mise à jour du statut d'une commande.
  */
-router.patch(
-    '/:orderId/status',
-    protect,
-    restrictTo('ADMIN'),
-    orderController.updateStatus
-);
-
-
-/**
- * POST /api/v1/orders/:orderId/cancel
- * Annule une commande PENDING et libère le stock réservé (ex: retour depuis Stripe).
- * Accessible par les guests et les utilisateurs connectés.
- */
-router.post(
-    '/:orderId/cancel',
-    optionalAuth,
-    (req, _res, next) => {
-        validateUUID(req.params.orderId, 'orderId');
-        next();
-    },
-    orderController.cancelOrder
-);
+router.patch('/:orderId/status', protect, restrictTo('ADMIN'), orderController.updateStatus);
 
 export default router;

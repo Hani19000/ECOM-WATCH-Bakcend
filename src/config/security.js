@@ -4,7 +4,7 @@ import compression from 'compression';
 import rateLimit from 'express-rate-limit';
 import { ENV } from './environment.js';
 import { ERRORS } from '../constants/errors.js';
-import { logInfo, logError } from '../utils/logger.js';
+import { logInfo } from '../utils/logger.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
 import { NotFoundError } from '../utils/appError.js';
 
@@ -16,9 +16,6 @@ import { NotFoundError } from '../utils/appError.js';
  * Extrait l'IP réelle du client.
  * Indispensable pour les plateformes PaaS (Render, Heroku, Vercel) qui
  * placent l'app derrière un Load Balancer.
- *
- * @param {import('express').Request} req
- * @returns {string} L'adresse IP normalisée ou 'unknown'
  */
 const getClientIp = (req) => {
     const forwardedFor = req.headers['x-forwarded-for'];
@@ -28,28 +25,21 @@ const getClientIp = (req) => {
     return req.ip || 'unknown';
 };
 
-/**
- * Définit les origines autorisées (CORS) de base.
- */
 const getAllowedOrigins = () => {
     if (ENV.server.nodeEnv === 'production') {
-        return [
-            'https://ecomwatch.vercel.app',
-            /\.vercel\.app$/
-        ];
+        return ['https://ecomwatch.vercel.app', /\.vercel\.app$/];
     }
     return [];
 };
 
 // Fusion intelligente des origines .env et des origines par défaut
 const getOrigins = () => {
-    const envOrigins = process.env.CORS_ORIGINS?.split(',').map(o => o.trim()) || [];
+    const envOrigins = process.env.CORS_ORIGINS?.split(',').map((origin) => origin.trim()) || [];
     const defaultOrigins = getAllowedOrigins();
-
     const combined = [...envOrigins, ...defaultOrigins];
 
-    const uniqueStrings = [...new Set(combined.filter(o => typeof o === 'string'))];
-    const regexes = combined.filter(o => o instanceof RegExp);
+    const uniqueStrings = [...new Set(combined.filter((origin) => typeof origin === 'string'))];
+    const regexes = combined.filter((origin) => origin instanceof RegExp);
 
     return [...uniqueStrings, ...regexes];
 };
@@ -59,8 +49,8 @@ const origins = getOrigins();
 // ================================================================
 // MIDDLEWARES DE SÉCURITÉ (GLOBAL)
 // ================================================================
+
 /**
- * Configuration Helmet : En-têtes de sécurité HTTP.
  * Définit la Content Security Policy (CSP) pour bloquer les scripts malveillants.
  */
 export const helmetMiddleware = helmet({
@@ -91,30 +81,28 @@ export const helmetMiddleware = helmet({
 });
 
 /**
- * Configuration CORS : Cross-Origin Resource Sharing.
  * Vérifie strictement l'origine des requêtes.
  */
 export const corsMiddleware = cors({
-    origin: (origin, cb) => {
-        // Autorise les requêtes sans origine (ex: Postman, App Mobile) ou listées
-        const isAllowed = !origin || origins.some((allowedOrigin) =>
-            allowedOrigin instanceof RegExp
-                ? allowedOrigin.test(origin)
-                : allowedOrigin === origin
-        );
+    origin: (origin, callback) => {
+        const isAllowed =
+            !origin ||
+            origins.some((allowedOrigin) =>
+                allowedOrigin instanceof RegExp
+                    ? allowedOrigin.test(origin)
+                    : allowedOrigin === origin
+            );
 
         return isAllowed
-            ? cb(null, true)
-            : cb(new Error(`Origine non autorisée par CORS : ${origin}`));
+            ? callback(null, true)
+            : callback(new Error(`Origine non autorisée par CORS : ${origin}`));
     },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
-    credentials: true, // Autorise les cookies/headers d'auth
+    credentials: true,
 });
 
 /**
- * Compression GZIP.
- * Améliore la vitesse de réponse pour les clients compatibles.
- * Filtre personnalisé pour désactiver via header si besoin.
+ * Filtre personnalisé pour désactiver la compression via header si besoin.
  */
 export const compressResponse = compression({
     filter: (req, res) => {
@@ -125,12 +113,11 @@ export const compressResponse = compression({
 });
 
 // ================================================================
-// RATE LIMITERS (Stratégies anti-abus)
+// RATE LIMITERS
 // ================================================================
 
 /**
- * Limiteur Global.
- * Premier rempart contre le scraping massif et les attaques DDoS basiques.
+ * Limiteur Global — premier rempart contre le scraping massif et les attaques DDoS.
  */
 export const generalLimiter = rateLimit({
     windowMs: ENV.rateLimit.windowMs,
@@ -142,8 +129,7 @@ export const generalLimiter = rateLimit({
 });
 
 /**
- * Limiteur Authentification (Login/Register).
- * Strict pour empêcher le Brute-Force sur les identifiants.
+ * Limiteur Authentification — strict pour empêcher le brute-force sur les identifiants.
  */
 export const authLimiter = rateLimit({
     windowMs: ENV.rateLimit.authWindowMs,
@@ -153,8 +139,7 @@ export const authLimiter = rateLimit({
     legacyHeaders: false,
     keyGenerator: (req) => getClientIp(req),
     handler: (req, res) => {
-        const clientIp = getClientIp(req);
-        logInfo(`Tentative de spam détectée depuis l'IP : ${clientIp}`);
+        logInfo(`Tentative de spam détectée depuis l'IP : ${getClientIp(req)}`);
         res.status(HTTP_STATUS.TOO_MANY_REQUESTS).json({
             status: HTTP_STATUS.TOO_MANY_REQUESTS,
             error: ERRORS.AUTH.TOO_MANY_ATTEMPTS,
@@ -164,104 +149,85 @@ export const authLimiter = rateLimit({
 });
 
 /**
- * Limiteur Changement de Mot de Passe.
- * Critique : Protège contre le brute-force de l'ancien mot de passe.
+ * Limiteur Changement de Mot de Passe — protège contre le brute-force de l'ancien mot de passe.
  */
 export const passwordChangeLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,  // 15 minutes
-    max: 3,                      // 3 tentatives max
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 3,
     validate: { ip: false },
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req) => `password-change:${getClientIp(req)}:${req.user?.id || 'anonymous'}`,
-
     handler: (req, res) => {
-        const clientIp = getClientIp(req);
-        const userId = req.user?.id || 'anonymous';
-
-        // Log de la tentative bloquée (remplace onLimitReached)
-        logInfo(`Rate limit changement MDP dépassé : IP=${clientIp}, User=${userId}`);
-
+        logInfo(
+            `Rate limit changement MDP dépassé : IP=${getClientIp(req)}, User=${req.user?.id || 'anonymous'}`
+        );
         res.status(HTTP_STATUS.TOO_MANY_REQUESTS).json({
             status: HTTP_STATUS.TOO_MANY_REQUESTS,
             error: 'TOO_MANY_ATTEMPTS',
             message: 'Trop de tentatives de changement de mot de passe. Veuillez réessayer dans 15 minutes.',
-            retryAfter: '15 minutes'
+            retryAfter: '15 minutes',
         });
-    }
+    },
 });
 
 /**
- * Limiteur Suivi de Commande Guest.
- * Protège contre l'énumération des IDs de commande.
+ * Limiteur Suivi de Commande Guest — protège contre l'énumération des IDs de commande.
  */
 export const trackingGuestLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,  // 15 minutes
-    max: 5000,                      // 5 tentatives max
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 5000,
     validate: { ip: false },
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req) => `tracking-guest:${getClientIp(req)}`,
-
     handler: (req, res) => {
-        const clientIp = getClientIp(req);
-
-        // Log de la tentative bloquée (remplace onLimitReached)
-        logInfo(`Rate limit suivi guest dépassé : IP=${clientIp}`);
-
+        logInfo(`Rate limit suivi guest dépassé : IP=${getClientIp(req)}`);
         res.status(HTTP_STATUS.TOO_MANY_REQUESTS).json({
             status: HTTP_STATUS.TOO_MANY_REQUESTS,
             error: 'TOO_MANY_ATTEMPTS',
             message: 'Trop de tentatives de recherche. Veuillez réessayer dans 15 minutes.',
-            retryAfter: '15 minutes'
+            retryAfter: '15 minutes',
         });
-    }
+    },
 });
 
 /**
- * Limiteur Profil Utilisateur.
- * Plus permissif pour permettre la navigation normale / polling.
+ * Limiteur Profil Utilisateur — permissif pour autoriser la navigation normale et le polling.
  */
 export const profileGeneralLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,  // 15 minutes
-    max: 5000,                    // 100 tentatives max
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 5000,
     validate: { ip: false },
     standardHeaders: true,
     legacyHeaders: false,
-    keyGenerator: (req) => `profile-general:${getClientIp(req)}:${req.user?.id || 'anonymous'}`,
-
+    keyGenerator: (req) =>
+        `profile-general:${getClientIp(req)}:${req.user?.id || 'anonymous'}`,
     handler: (req, res) => {
-        const clientIp = getClientIp(req);
-        const userId = req.user?.id || 'anonymous';
-
-        logInfo(`Rate limit profil général dépassé : IP=${clientIp}, User=${userId}`);
-
+        logInfo(
+            `Rate limit profil général dépassé : IP=${getClientIp(req)}, User=${req.user?.id || 'anonymous'}`
+        );
         res.status(HTTP_STATUS.TOO_MANY_REQUESTS).json({
             status: HTTP_STATUS.TOO_MANY_REQUESTS,
             error: 'TOO_MANY_REQUESTS',
             message: 'Trop de requêtes. Veuillez réessayer dans 15 minutes.',
-            retryAfter: '15 minutes'
+            retryAfter: '15 minutes',
         });
-    }
+    },
 });
 
 /**
- * Limiteur Réinitialisation de Mot de Passe.
- * Strict pour prévenir l'abus d'envoi d'emails et le brute-force de tokens.
- * Clé par IP uniquement (pas d'userId car l'utilisateur est déconnecté).
+ * Limiteur Réinitialisation de Mot de Passe — clé par IP uniquement car l'utilisateur est déconnecté.
  */
 export const passwordResetLimiter = rateLimit({
     windowMs: 60 * 60 * 1000, // 1 heure
-    max: 5,                     // 5 tentatives max (forgot + reset confondus)
+    max: 5,
     validate: { ip: false },
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req) => `password-reset:${getClientIp(req)}`,
-
     handler: (req, res) => {
-        const clientIp = getClientIp(req);
-        logInfo(`Rate limit reset MDP dépassé : IP=${clientIp}`);
-
+        logInfo(`Rate limit reset MDP dépassé : IP=${getClientIp(req)}`);
         res.status(HTTP_STATUS.TOO_MANY_REQUESTS).json({
             status: HTTP_STATUS.TOO_MANY_REQUESTS,
             error: 'TOO_MANY_ATTEMPTS',
@@ -276,8 +242,7 @@ export const passwordResetLimiter = rateLimit({
 // ================================================================
 
 /**
- * Middleware 404.
- * Intercepte toutes les requêtes qui n'ont pas trouvé de route correspondante.
+ * Middleware 404 — intercepte toutes les requêtes sans route correspondante.
  */
 export const notFound = (req, _res, next) => {
     next(new NotFoundError('Route', req.originalUrl));

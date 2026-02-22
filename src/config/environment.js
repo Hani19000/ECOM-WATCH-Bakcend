@@ -7,7 +7,6 @@
  */
 import 'dotenv/config';
 
-/** Variables obligatoires sans lesquelles l'application ne peut pas démarrer */
 const requiredEnv = [
     'PORT',
     'JWT_ACCESS_SECRET',
@@ -17,30 +16,34 @@ const requiredEnv = [
     'REDIS_PORT',
     'CLIENT_URL',
     'STRIPE_SECRET_KEY',
-    'STRIPE_WEBHOOK_SECRET'
+    'STRIPE_WEBHOOK_SECRET',
 ];
 
 // On vérifie soit la DATABASE_URL (Cloud), soit l'ensemble des paramètres Host/User/Pass (Local)
-const hasPostgresConfig = process.env.DATABASE_URL || (
-    process.env.POSTGRES_HOST &&
-    process.env.POSTGRES_USER &&
-    process.env.POSTGRES_PASSWORD &&
-    process.env.POSTGRES_DB
-);
+const hasPostgresConfig =
+    process.env.DATABASE_URL ||
+    (process.env.POSTGRES_HOST &&
+        process.env.POSTGRES_USER &&
+        process.env.POSTGRES_PASSWORD &&
+        process.env.POSTGRES_DB);
 
 const missingEnv = requiredEnv.filter((key) => !process.env[key]);
 
 if (missingEnv.length > 0 || !hasPostgresConfig) {
-    const errorMsg = missingEnv.length > 0
-        ? `Missing environment variables: ${missingEnv.join(', ')}`
-        : 'Missing PostgreSQL configuration (DATABASE_URL or individual POSTGRES_* variables)';
+    const errorMsg =
+        missingEnv.length > 0
+            ? `Missing environment variables: ${missingEnv.join(', ')}`
+            : 'Missing PostgreSQL configuration (DATABASE_URL or individual POSTGRES_* variables)';
     throw new Error(errorMsg);
 }
+
+const isProduction = process.env.NODE_ENV === 'production';
 
 export const ENV = Object.freeze({
     server: {
         port: Number(process.env.PORT) || 3000,
         nodeEnv: process.env.NODE_ENV || 'development',
+        isProduction,
     },
     database: {
         postgres: {
@@ -55,7 +58,7 @@ export const ENV = Object.freeze({
             host: process.env.REDIS_HOST || 'redis',
             port: Number(process.env.REDIS_PORT) || 6379,
             password: process.env.REDIS_PASSWORD || undefined,
-        }
+        },
     },
     jwt: {
         accessTokenSecret: process.env.JWT_ACCESS_SECRET,
@@ -79,6 +82,11 @@ export const ENV = Object.freeze({
     stripe: {
         secretKey: process.env.STRIPE_SECRET_KEY,
         webhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
+    },
+    cloudinary: {
+        cloudName: process.env.CLOUDINARY_CLOUD_NAME,
+        apiKey: process.env.CLOUDINARY_API_KEY,
+        apiSecret: process.env.CLOUDINARY_API_SECRET,
     },
     clientUrl: process.env.CLIENT_URL || 'http://localhost:3000',
     email: {

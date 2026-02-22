@@ -62,7 +62,7 @@ export const promotionsRepo = {
             `SELECT COUNT(*) FROM promotions ${whereClause}`,
             params
         );
-        const total = parseInt(countRows[0].count);
+        const total = parseInt(countRows[0].count, 10);
 
         const { rows } = await client.query(
             `SELECT * FROM promotions

@@ -33,23 +33,25 @@ router.get('/filters', productController.getFilters);
  * Valide l'existence et le stock de plusieurs variantes en une seule requête.
  * Utilisé par le frontend pour détecter les ruptures avant checkout.
  */
-router.post('/validate-variants', asyncHandler(async (req, res) => {
-    const { variantIds } = req.body;
+router.post(
+    '/validate-variants',
+    asyncHandler(async (req, res) => {
+        const { variantIds } = req.body;
 
-    if (!Array.isArray(variantIds)) {
-        return res.status(HTTP_STATUS.BAD_REQUEST).json({
-            status: 'error',
-            message: 'variantIds doit être un tableau',
-        });
-    }
+        if (!Array.isArray(variantIds)) {
+            return res
+                .status(HTTP_STATUS.BAD_REQUEST)
+                .json({ status: 'error', message: 'variantIds doit être un tableau' });
+        }
 
-    const variants = await productService.validateVariants(variantIds);
+        const variants = await productService.validateVariants(variantIds);
 
-    // Dictionnaire { variantId: stock } — les IDs absents = variantes supprimées
-    const stockMap = Object.fromEntries(variants.map((v) => [v.id, v.stock]));
+        // Dictionnaire { variantId: stock } — les IDs absents correspondent à des variantes supprimées
+        const stockMap = Object.fromEntries(variants.map((variant) => [variant.id, variant.stock]));
 
-    res.status(HTTP_STATUS.OK).json({ status: 'success', data: { stockMap } });
-}));
+        res.status(HTTP_STATUS.OK).json({ status: 'success', data: { stockMap } });
+    })
+);
 
 router.get('/', productController.getAll);
 router.get('/:idOrSlug', productController.getOne);
@@ -60,7 +62,8 @@ router.get('/:idOrSlug', productController.getOne);
 
 router.use(protect, restrictTo('ADMIN'));
 
-router.post('/',
+router.post(
+    '/',
     handleUpload(uploadCloud, 'image'),
     (req, _res, next) => {
         try {
@@ -73,16 +76,19 @@ router.post('/',
                 req.body.variant = {
                     sku: req.body.sku,
                     price: req.body.price,
-                    attributes: typeof req.body.attributes === 'string'
-                        ? JSON.parse(req.body.attributes)
-                        : req.body.attributes,
+                    attributes:
+                        typeof req.body.attributes === 'string'
+                            ? JSON.parse(req.body.attributes)
+                            : req.body.attributes,
                 };
             }
 
             validateRequired(req.body, ['name', 'slug']);
 
             if (!req.body.variant) {
-                throw new ValidationError("L'objet 'variant' ou les champs 'sku/price' sont obligatoires.");
+                throw new ValidationError(
+                    "L'objet 'variant' ou les champs 'sku/price' sont obligatoires."
+                );
             }
 
             validateRequired(req.body.variant, ['sku', 'price']);
@@ -96,20 +102,25 @@ router.post('/',
 
 router.patch('/:id', productController.update);
 
-router.delete('/:id', (req, _res, next) => {
-    try {
-        validateUUID(req.params.id);
-        next();
-    } catch (err) {
-        next(err);
-    }
-}, productController.delete);
+router.delete(
+    '/:id',
+    (req, _res, next) => {
+        try {
+            validateUUID(req.params.id);
+            next();
+        } catch (err) {
+            next(err);
+        }
+    },
+    productController.delete
+);
 
 /**
  * POST /api/v1/products/:productId/variants
  * Ajoute une variante à un produit existant.
  */
-router.post('/:productId/variants',
+router.post(
+    '/:productId/variants',
     handleUpload(uploadCloud, 'image'),
     (req, _res, next) => {
         try {
@@ -130,7 +141,8 @@ router.post('/:productId/variants',
  * PATCH /api/v1/products/variants/:id
  * Met à jour une variante spécifique.
  */
-router.patch('/variants/:id',
+router.patch(
+    '/variants/:id',
     (req, _res, next) => {
         try {
             validateUUID(req.params.id);
@@ -145,13 +157,17 @@ router.patch('/variants/:id',
     })
 );
 
-router.delete('/variants/:id', (req, _res, next) => {
-    try {
-        validateUUID(req.params.id);
-        next();
-    } catch (err) {
-        next(err);
-    }
-}, productController.deleteVariant);
+router.delete(
+    '/variants/:id',
+    (req, _res, next) => {
+        try {
+            validateUUID(req.params.id);
+            next();
+        } catch (err) {
+            next(err);
+        }
+    },
+    productController.deleteVariant
+);
 
 export default router;

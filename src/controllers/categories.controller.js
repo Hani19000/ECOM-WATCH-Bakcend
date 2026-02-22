@@ -6,7 +6,7 @@
 import { categoryService } from '../services/categories.service.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
-import { AppError } from '../utils/appError.js';
+import { ValidationError } from '../utils/appError.js';
 
 class CategoryController {
     /**
@@ -31,7 +31,7 @@ class CategoryController {
         const { name, slug } = req.body;
 
         if (!name || !slug) {
-            throw new AppError('Le nom et le slug sont requis.', HTTP_STATUS.BAD_REQUEST);
+            throw new ValidationError('Le nom et le slug sont requis.');
         }
 
         const newCategory = await categoryService.createCategory({ name, slug });

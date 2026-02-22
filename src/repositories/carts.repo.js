@@ -210,7 +210,7 @@ export const cartsRepo = {
       [cartId]
     );
 
-    return parseInt(rows[0].count);
+    return parseInt(rows[0].count, 10);
   },
 
   async hasItems(cartId) {

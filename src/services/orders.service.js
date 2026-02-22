@@ -1,14 +1,23 @@
 /**
  * @module Service/Order
+ *
+ * Orchestre la création, l'annulation et le suivi des commandes.
+ * Source de vérité pour le cycle de vie d'une commande et la libération de stock.
  */
-import { ordersRepo, inventoryRepo, cartsRepo, shipmentsRepo } from '../repositories/index.js';
-import { productsRepo } from '../repositories/index.js';
+import {
+    ordersRepo,
+    inventoryRepo,
+    cartsRepo,
+    shipmentsRepo,
+    productsRepo,
+} from '../repositories/index.js';
 import { shippingService } from './shipping.service.js';
 import { taxService } from './tax.service.js';
 import { notificationService } from './notifications/notification.service.js';
 import { cacheService } from './cache.service.js';
-import { AppError } from '../utils/appError.js';
+import { AppError, ValidationError, BusinessError } from '../utils/appError.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
+import { ORDER_STATUS } from '../constants/enums.js';
 import { pgPool } from '../config/database.js';
 import { logInfo, logError } from '../utils/logger.js';
 import crypto from 'crypto';
@@ -61,6 +70,10 @@ class OrderService {
         return new Promise((resolve) => setTimeout(resolve, delayMs));
     }
 
+    /**
+     * Comparaison d'emails résistante aux timing attacks.
+     * Évite de révéler l'existence d'un compte via un différentiel de temps de réponse.
+     */
     async #timingSafeEmailCompare(storedEmail, providedEmail) {
         try {
             const storedBuffer = Buffer.from(storedEmail, 'utf8');
@@ -105,7 +118,7 @@ class OrderService {
                 }
             }
         } catch (error) {
-            logError(error, { context: 'OrderService invalidateVariantCache', variantId });
+            logError(error, { context: 'OrderService.invalidateVariantCache', variantId });
         }
     }
 
@@ -116,9 +129,8 @@ class OrderService {
     /**
      * Annule une commande et libère atomiquement tout le stock réservé.
      *
-     * Cette méthode est la source de vérité pour toute annulation de commande,
-     * qu'elle soit déclenchée par :
-     * - L'utilisateur depuis le frontend (clic sur "Annuler" côté Stripe)
+     * Source de vérité pour toute annulation, qu'elle soit déclenchée par :
+     * - L'utilisateur (clic "Annuler" depuis le frontend)
      * - Le webhook Stripe (checkout.session.expired)
      * - Le cron de nettoyage (commandes PENDING expirées)
      *
@@ -137,24 +149,21 @@ class OrderService {
 
             const items = await ordersRepo.listItems(orderId, client);
 
-            // Libération atomique de chaque article réservé
             for (const item of items) {
                 await inventoryRepo.release(item.variantId, item.quantity, client);
-
-                // Invalidation synchrone de la clé stock dans la transaction
                 cacheService.delete(`stock:variant:${item.variantId}`).catch(() => { });
             }
 
             await client.query(
-                `UPDATE orders SET status = 'CANCELLED', updated_at = NOW() WHERE id = $1`,
-                [orderId]
+                `UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2`,
+                [ORDER_STATUS.CANCELLED, orderId]
             );
 
             await client.query('COMMIT');
 
             logInfo(`[Stock] Stock libéré — orderId: ${orderId}, reason: ${reason}`);
 
-            // Invalidation du cache produit hors transaction (non bloquant)
+            // Invalidation du cache produit hors transaction (non bloquant).
             for (const item of items) {
                 this.#invalidateVariantCache(item.variantId).catch(() => { });
             }
@@ -188,18 +197,16 @@ class OrderService {
             throw new AppError('Commande introuvable', HTTP_STATUS.NOT_FOUND);
         }
 
-        if (order.status === 'PAID') {
-            throw new AppError("Impossible d'annuler une commande déjà payée", HTTP_STATUS.BAD_REQUEST);
+        if (order.status === ORDER_STATUS.PAID) {
+            throw new BusinessError("Impossible d'annuler une commande déjà payée");
         }
 
-        // Idempotence : retour silencieux si déjà annulée
-        if (order.status === 'CANCELLED') {
+        if (order.status === ORDER_STATUS.CANCELLED) {
             return { message: 'Commande déjà annulée' };
         }
 
         await this._assertOrderAccess(order, user, email);
 
-        // FIX : appel interne — plus de dépendance circulaire vers PaymentService
         await this.cancelOrderAndReleaseStock(orderId, 'user_cancel');
 
         return { message: 'Commande annulée avec succès' };
@@ -222,7 +229,6 @@ class OrderService {
             return;
         }
 
-        // Vérification email pour les guests
         const orderEmail = order.shippingAddress?.email?.trim().toLowerCase();
         const providedEmail = email?.trim().toLowerCase();
 
@@ -248,7 +254,7 @@ class OrderService {
         } = checkoutData;
 
         if (!items || !Array.isArray(items) || items.length === 0) {
-            throw new AppError('Le panier est vide', HTTP_STATUS.BAD_REQUEST);
+            throw new ValidationError('Le panier est vide');
         }
 
         const client = await pgPool.connect();
@@ -287,7 +293,7 @@ class OrderService {
                 taxRate: totals.tax.rate,
                 totalAmount: totals.totalAmount,
                 shippingAddress,
-                status: 'PENDING',
+                status: ORDER_STATUS.PENDING,
             });
 
             for (const item of itemsWithRealPrices) {
@@ -331,7 +337,7 @@ class OrderService {
             cartItems = await cartsRepo.listItems(cart.id);
         }
         if (!cartItems || cartItems.length === 0) {
-            throw new AppError('Le panier est vide', HTTP_STATUS.BAD_REQUEST);
+            throw new ValidationError('Le panier est vide');
         }
 
         const itemsWithRealPrices = await Promise.all(
@@ -386,8 +392,10 @@ class OrderService {
         const { page = 1, limit = 10, status = null } = options;
         const allOrders = await ordersRepo.listByUserId(userId);
         const filtered = status ? allOrders.filter((o) => o.status === status) : allOrders;
-        const offset = (parseInt(page) - 1) * parseInt(limit);
-        const paginated = filtered.slice(offset, offset + parseInt(limit));
+        const parsedPage = parseInt(page, 10);
+        const parsedLimit = parseInt(limit, 10);
+        const offset = (parsedPage - 1) * parsedLimit;
+        const paginated = filtered.slice(offset, offset + parsedLimit);
 
         return {
             orders: await Promise.all(
@@ -397,10 +405,10 @@ class OrderService {
                 }))
             ),
             pagination: {
-                page: parseInt(page),
-                limit: parseInt(limit),
+                page: parsedPage,
+                limit: parsedLimit,
                 total: filtered.length,
-                totalPages: Math.ceil(filtered.length / parseInt(limit)),
+                totalPages: Math.ceil(filtered.length / parsedLimit),
             },
         };
     }
@@ -411,10 +419,7 @@ class OrderService {
 
     async getOrderDetailsGuest(orderId, email) {
         if (!email || typeof email !== 'string' || email.trim() === '') {
-            throw new AppError(
-                'Email requis pour accéder aux détails de la commande',
-                HTTP_STATUS.BAD_REQUEST
-            );
+            throw new ValidationError('Email requis pour accéder aux détails de la commande');
         }
 
         const order = await ordersRepo.findGuestOnlyById(orderId);
@@ -476,8 +481,8 @@ class OrderService {
                     const claimed = await ordersRepo.transferOwnership(order.id, newUserId, email);
                     claimedOrders.push(claimed);
                     claimedOrderNumbers.push(order.orderNumber || order.order_number);
-                } catch (e) {
-                    logError(e);
+                } catch (error) {
+                    logError(error, { context: 'OrderService.autoClaimGuestOrders', orderId: order.id });
                 }
             }
 
@@ -497,22 +502,19 @@ class OrderService {
 
         const previousStatus = order.status;
 
-        if (order.status === 'SHIPPED' && newStatus === 'CANCELLED') {
-            throw new AppError(
-                "Impossible d'annuler une commande déjà expédiée",
-                HTTP_STATUS.BAD_REQUEST
-            );
+        if (order.status === ORDER_STATUS.SHIPPED && newStatus === ORDER_STATUS.CANCELLED) {
+            throw new BusinessError("Impossible d'annuler une commande déjà expédiée");
         }
 
         const updatedOrder = await ordersRepo.updateStatus(orderId, newStatus);
         let shipmentData = null;
 
-        if (newStatus === 'SHIPPED') {
+        if (newStatus === ORDER_STATUS.SHIPPED) {
             const shipment = await shipmentsRepo.create({ orderId });
             shipmentData = shipment;
         }
 
-        if (newStatus === 'CANCELLED') {
+        if (newStatus === ORDER_STATUS.CANCELLED) {
             const items = await ordersRepo.listItems(orderId);
             for (const item of items) {
                 await inventoryRepo.release(item.variantId, item.quantity);
@@ -534,9 +536,9 @@ class OrderService {
         try {
             notificationService
                 .notifyOrderStatusChange(previousStatus, newStatus, userId, order, metadata)
-                .catch((e) => logError(e));
-        } catch (e) {
-            logError(e);
+                .catch((error) => logError(error, { context: 'OrderService.sendOrderStatusNotification', orderId: order.id }));
+        } catch (error) {
+            logError(error, { context: 'OrderService.sendOrderStatusNotification', orderId: order.id });
         }
     }
 }

@@ -4,7 +4,7 @@
  * Gère les attributions de rôles et les règles de sécurité RBAC.
  */
 import { rolesRepo, usersRepo } from '../repositories/index.js';
-import { AppError } from '../utils/appError.js';
+import { AppError, ConflictError, BusinessError } from '../utils/appError.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
 
 class RoleService {
@@ -50,9 +50,8 @@ class RoleService {
         if (roleName.toUpperCase() === 'ADMIN') {
             const admins = await rolesRepo.countUsersByRole(role.id);
             if (admins <= 1) {
-                throw new AppError(
-                    'Action impossible : il doit rester au moins un administrateur',
-                    HTTP_STATUS.BAD_REQUEST
+                throw new BusinessError(
+                    'Action impossible : il doit rester au moins un administrateur'
                 );
             }
         }
@@ -64,7 +63,7 @@ class RoleService {
         const normalizedName = name.toUpperCase();
 
         const existing = await rolesRepo.findByName(normalizedName);
-        if (existing) throw new AppError('Ce rôle existe déjà', HTTP_STATUS.CONFLICT);
+        if (existing) throw new ConflictError('Ce rôle existe déjà');
 
         return await rolesRepo.create({ name: normalizedName, description });
     }

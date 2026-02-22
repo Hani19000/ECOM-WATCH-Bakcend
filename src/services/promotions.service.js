@@ -5,7 +5,7 @@
  */
 import { promotionsRepo } from '../repositories/promotions.repo.js';
 import { productsRepo } from '../repositories/products.repo.js';
-import { AppError } from '../utils/appError.js';
+import { AppError, ValidationError } from '../utils/appError.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
 import { pgPool } from '../config/database.js';
 import { cacheService } from './cache.service.js';
@@ -44,12 +44,10 @@ class PromotionService {
         if (!productIds?.length) return;
 
         try {
-            // Résolution des clés individuelles (id + slug) pour chaque produit
             const perProductKeys = await Promise.all(
                 productIds.map((id) => this.#buildProductCacheKeys(id))
             );
 
-            // Aplatissement + ajout du wildcard catalogue → deleteMany gère les patterns glob
             const allKeys = [
                 ...perProductKeys.flat(),
                 'catalog:list:*',
@@ -58,25 +56,19 @@ class PromotionService {
             await cacheService.deleteMany(allKeys);
             logInfo(`Cache invalidé pour les produits : ${productIds.join(', ')}`);
         } catch (error) {
-            logError('Erreur invalidation cache promotion', error);
+            logError(error, { context: 'PromotionService.invalidateProductsCache', productIds });
         }
     }
 
     #validateDates(startDate, endDate) {
         if (new Date(endDate) <= new Date(startDate)) {
-            throw new AppError(
-                'La date de fin doit être après la date de début',
-                HTTP_STATUS.BAD_REQUEST
-            );
+            throw new ValidationError('La date de fin doit être après la date de début');
         }
     }
 
     #validatePercentage(discountType, discountValue) {
         if (discountType === 'PERCENTAGE' && discountValue > 100) {
-            throw new AppError(
-                'Le pourcentage ne peut pas dépasser 100%',
-                HTTP_STATUS.BAD_REQUEST
-            );
+            throw new ValidationError('Le pourcentage ne peut pas dépasser 100%');
         }
     }
 

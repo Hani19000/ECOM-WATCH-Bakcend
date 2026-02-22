@@ -16,7 +16,7 @@ import { passwordResetRepo } from '../repositories/passwordreset.repo.js';
 import { passwordService } from './password.service.js';
 import { sessionService } from './session.service.js';
 import { notificationService } from './notifications/notification.service.js';
-import { AppError } from '../utils/appError.js';
+import { AppError, BusinessError } from '../utils/appError.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
 import { logInfo, logError } from '../utils/logger.js';
 
@@ -52,7 +52,7 @@ class PasswordResetService {
         const normalizedEmail = email.trim().toLowerCase();
         const user = await usersRepo.findByEmail(normalizedEmail);
 
-        // Sortie silencieuse : ne révèle pas si l'email est enregistré
+        // Sortie silencieuse : ne révèle pas si l'email est enregistré.
         if (!user) return;
 
         const { rawToken, tokenHash } = this.#generateToken();
@@ -75,7 +75,7 @@ class PasswordResetService {
      * 5. Suppression du token (usage unique)
      * 6. Invalidation de toutes les sessions actives (sécurité post-compromission)
      *
-     * @param {string} rawToken   - Token brut extrait du lien email
+     * @param {string} rawToken    - Token brut extrait du lien email
      * @param {string} newPassword - Nouveau mot de passe choisi par l'utilisateur
      */
     async resetPassword(rawToken, newPassword) {
@@ -99,10 +99,10 @@ class PasswordResetService {
         await usersRepo.addToHistory(user.id, user.passwordHash, user.salt);
         await usersRepo.updateCredentials(user.id, { passwordHash: newHash, salt: newSalt });
 
-        // Usage unique : on supprime le token immédiatement après consommation
+        // Usage unique : on supprime le token immédiatement après consommation.
         await passwordResetRepo.deleteToken(tokenHash);
 
-        // Invalider toutes les sessions pour forcer une reconnexion propre
+        // Invalider toutes les sessions pour forcer une reconnexion propre.
         await this.#invalidateAllSessions(user.id);
 
         logInfo(`Mot de passe réinitialisé pour userId=${user.id}`);
@@ -113,7 +113,7 @@ class PasswordResetService {
      * Contrôle le mot de passe courant + les 2 dernières entrées de l'historique.
      *
      * @private
-     * @throws {AppError} si le mot de passe est déjà connu
+     * @throws {BusinessError} si le mot de passe est déjà connu
      */
     async #assertPasswordNotReused(user, newPassword) {
         const history = await usersRepo.getPasswordHistory(user.id, 2);
@@ -129,9 +129,8 @@ class PasswordResetService {
                 entry.salt
             );
             if (isReused) {
-                throw new AppError(
-                    'Vous ne pouvez pas réutiliser un de vos anciens mots de passe.',
-                    HTTP_STATUS.BAD_REQUEST
+                throw new BusinessError(
+                    'Vous ne pouvez pas réutiliser un de vos anciens mots de passe.'
                 );
             }
         }
@@ -147,7 +146,7 @@ class PasswordResetService {
         try {
             await sessionService.deleteAllUserSessions(userId);
         } catch (error) {
-            logError(error, { context: 'invalidateAllSessions after reset', userId });
+            logError(error, { context: 'PasswordResetService.invalidateAllSessions', userId });
         }
     }
 
@@ -162,11 +161,11 @@ class PasswordResetService {
             const result = notificationService.notifyPasswordReset(email, rawToken);
             if (result && typeof result.catch === 'function') {
                 result.catch((error) =>
-                    logError(error, { context: 'notification reset password', email })
+                    logError(error, { context: 'PasswordResetService.sendResetNotification', email })
                 );
             }
         } catch (error) {
-            logError(error, { context: 'notification reset password', email });
+            logError(error, { context: 'PasswordResetService.sendResetNotification', email });
         }
     }
 }

@@ -5,9 +5,8 @@
  * Interroge uniquement les slugs des produits actifs — pas de chargement
  * des variantes ou des promotions pour garder la requête légère.
  *
- * Stratégie : pas de mise en cache Redis ici.
- * Google crawle le sitemap rarement (1x/jour max) et on veut toujours
- * des slugs frais si un produit est publié ou dépublié.
+ * Pas de mise en cache Redis : Google crawle le sitemap rarement (1x/jour max)
+ * et on veut toujours des slugs frais si un produit est publié ou dépublié.
  */
 import { pgPool } from '../config/database.js';
 import { ENV } from '../config/environment.js';
@@ -35,10 +34,6 @@ const STATIC_PAGES = [
 
 // ─── HELPERS PURS ─────────────────────────────────────────────────────────────
 
-/**
- * Échappe les caractères XML réservés dans une URL.
- * Protège contre les slugs contenant & < > ' "
- */
 const escapeXml = (str) =>
     String(str)
         .replace(/&/g, '&amp;')
@@ -47,15 +42,9 @@ const escapeXml = (str) =>
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&apos;');
 
-/**
- * Formate une date JS en YYYY-MM-DD (format W3C Date pour les sitemaps).
- */
 const toW3CDate = (date) =>
     (date instanceof Date ? date : new Date(date)).toISOString().split('T')[0];
 
-/**
- * Construit un bloc <url> XML à partir d'un objet page.
- */
 const buildUrlEntry = ({ loc, lastmod, changefreq, priority }) => `
   <url>
     <loc>${escapeXml(loc)}</loc>${lastmod ? `
@@ -104,10 +93,9 @@ class SitemapService {
         } catch (error) {
             // Si la DB est indisponible, on renvoie quand même le sitemap statique
             // plutôt que de faire échouer le crawl Google.
-            logError(error, { context: 'SitemapService generate — DB unavailable, falling back to static pages' });
+            logError(error, { context: 'SitemapService.generate — DB unavailable, fallback to static pages' });
         }
 
-        // ── Pages statiques ────────────────────────────────────────────────
         const staticEntries = STATIC_PAGES.map((page) =>
             buildUrlEntry({
                 loc: `${SITE_URL}${page.path}`,
@@ -116,7 +104,6 @@ class SitemapService {
             })
         );
 
-        // ── Pages produits dynamiques ──────────────────────────────────────
         const productEntries = products.map((product) =>
             buildUrlEntry({
                 loc: `${SITE_URL}/product/${escapeXml(product.slug)}`,
@@ -126,7 +113,6 @@ class SitemapService {
             })
         );
 
-        // ── Assemblage XML ─────────────────────────────────────────────────
         const allEntries = [...staticEntries, ...productEntries].join('\n');
 
         return [

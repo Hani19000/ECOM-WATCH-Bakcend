@@ -376,7 +376,7 @@ export const ordersRepo = {
     if (search) {
       values.push(`%${search}%`);
       whereClause += ` AND (
-            o.order_number ILIKE $${values.length} OR 
+            o.order_number ILIKE $${values.length} OR
             u.email ILIKE $${values.length} OR
             o.shipping_address->>'email' ILIKE $${values.length} OR
             o.shipping_address->>'lastName' ILIKE $${values.length}
@@ -384,7 +384,7 @@ export const ordersRepo = {
     }
 
     const countQuery = `
-        SELECT COUNT(*) 
+        SELECT COUNT(*)
         FROM orders o
         LEFT JOIN users u ON o.user_id = u.id
         ${whereClause}
@@ -402,7 +402,7 @@ export const ordersRepo = {
 
     const [dataResult, countResult] = await Promise.all([
       pgPool.query(query, values),
-      pgPool.query(countQuery, countValues)
+      pgPool.query(countQuery, countValues),
     ]);
 
     const total = parseInt(countResult.rows[0].count, 10);
@@ -413,8 +413,8 @@ export const ordersRepo = {
         page,
         limit,
         total,
-        totalPages: Math.ceil(total / limit)
-      }
+        totalPages: Math.ceil(total / limit),
+      },
     };
   },
 
@@ -438,7 +438,7 @@ export const ordersRepo = {
        WHERE status != 'CANCELLED'`
     );
     return {
-      count: parseInt(rows[0].count),
+      count: parseInt(rows[0].count, 10),
       totalAmount: parseFloat(rows[0].totalAmount),
     };
   },

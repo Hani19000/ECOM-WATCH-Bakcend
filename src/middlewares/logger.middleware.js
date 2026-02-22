@@ -1,10 +1,10 @@
 /**
- * @module Middleware/logInfo
+ * @module Middleware/RequestLogger
  *
  * Journalise chaque requête HTTP avec sa durée et son statut.
  * Actif uniquement hors production et hors test : en production,
  * la surveillance des requêtes est déléguée à Sentry/APM.
- * Format : [ISO] METHOD /url STATUS - Xms
+ * Format : METHOD /url STATUS - Xms
  */
 import { ENV } from '../config/environment.js';
 import { logInfo } from '../utils/logger.js';

@@ -8,9 +8,8 @@ import { userController } from '../controllers/users.controller.js';
 import { protect } from '../middlewares/auth.middleware.js';
 import { restrictTo } from '../middlewares/role.middleware.js';
 import { passwordChangeLimiter, profileGeneralLimiter } from '../config/security.js';
-import { validateRequired } from '../utils/validation.js';
-import { AppError } from '../utils/appError.js';
-import { HTTP_STATUS } from '../constants/httpStatus.js';
+import { validateRequired, validatePasswordStrength } from '../utils/validation.js';
+import { ValidationError } from '../utils/appError.js';
 
 const router = Router();
 
@@ -24,12 +23,13 @@ router.use('/me', profileGeneralLimiter);
 
 router.get('/me', userController.getProfile);
 
-router.patch('/me',
+router.patch(
+    '/me',
     (req, _res, next) => {
         const { firstName, lastName, phone } = req.body;
 
         if (!firstName && !lastName && !phone) {
-            throw new AppError('Au moins un champ doit être fourni', HTTP_STATUS.BAD_REQUEST);
+            throw new ValidationError('Au moins un champ doit être fourni');
         }
 
         next();
@@ -41,27 +41,12 @@ router.patch('/me',
  * PATCH /api/v1/users/update-password
  * Rate limit strict (3 req/15min) pour prévenir le brute-force.
  */
-router.patch('/update-password',
+router.patch(
+    '/update-password',
     passwordChangeLimiter,
     (req, _res, next) => {
         validateRequired(req.body, ['oldPassword', 'newPassword']);
-
-        const { newPassword } = req.body;
-
-        if (newPassword.length < 8) {
-            throw new AppError(
-                'Le mot de passe doit contenir au moins 8 caractères',
-                HTTP_STATUS.BAD_REQUEST
-            );
-        }
-
-        if (!/[A-Z]/.test(newPassword) || !/[a-z]/.test(newPassword) || !/[0-9]/.test(newPassword)) {
-            throw new AppError(
-                'Le mot de passe doit contenir au moins une majuscule, une minuscule et un chiffre',
-                HTTP_STATUS.BAD_REQUEST
-            );
-        }
-
+        validatePasswordStrength(req.body.newPassword);
         next();
     },
     userController.updatePassword

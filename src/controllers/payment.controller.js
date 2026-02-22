@@ -10,11 +10,7 @@ import { HTTP_STATUS } from '../constants/httpStatus.js';
 import { AppError } from '../utils/appError.js';
 import { ENV } from '../config/environment.js';
 
-/**
- * URL du frontend, définie une seule fois pour éviter la duplication et
- * garantir la cohérence entre handleSuccess et handleCancel.
- */
-const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
+const CLIENT_URL = ENV.clientUrl;
 
 /**
  * Valide le format d'un Stripe Session ID pour éviter l'injection dans le HTML de redirection.
@@ -109,7 +105,6 @@ class PaymentController {
     handleSuccess = asyncHandler(async (req, res) => {
         const { session_id } = req.query;
 
-        // Validation stricte du session_id avant injection dans le HTML de redirection
         const safeSessionId = isValidStripeSessionId(session_id) ? session_id : '';
         const redirectUrl = `${CLIENT_URL}/checkout/success${safeSessionId ? `?session_id=${safeSessionId}` : ''}`;
 

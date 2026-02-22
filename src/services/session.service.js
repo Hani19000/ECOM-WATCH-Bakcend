@@ -58,7 +58,7 @@ class SessionService {
         } catch (error) {
             // Si Redis est indisponible, on continue vers PostgreSQL plutôt que
             // de bloquer l'utilisateur — le cache est une optimisation, pas une source de vérité.
-            logError(error, { context: 'CacheService validateSession' });
+            logError(error, { context: 'SessionService.validateSession' });
         }
 
         const session = await refreshTokensRepo.findByToken(refreshToken);

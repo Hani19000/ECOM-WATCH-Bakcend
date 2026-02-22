@@ -10,8 +10,7 @@ import { ENV } from './environment.js';
 import { logInfo, logError } from '../utils/logger.js';
 
 /**
- * Configuration dynamique du Pool.
- * Priorise l'URL complète (DATABASE_URL) car elle contient souvent des paramètres 
+ * Priorise l'URL complète (DATABASE_URL) car elle contient souvent des paramètres
  * spécifiques au pooler (comme chez Neon).
  */
 const poolConfig = ENV.database.postgres.url
@@ -25,18 +24,14 @@ const poolConfig = ENV.database.postgres.url
         host: ENV.database.postgres.host,
         port: ENV.database.postgres.port,
         database: ENV.database.postgres.database,
-        // SSL conditionnel pour le développement local classique
-        ssl: ENV.server.isProduction
-            ? { require: true, rejectUnauthorized: false }
-            : false,
+        ssl: ENV.server.isProduction ? { require: true, rejectUnauthorized: false } : false,
     };
 
-// Options de performance du pool communes aux deux modes
 const finalConfig = {
     ...poolConfig,
     max: 20,
     idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 5000, // Augmenté pour éviter les timeouts au démarrage
+    connectionTimeoutMillis: 5000,
 };
 
 export const pgPool = new Pool(finalConfig);

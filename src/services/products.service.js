@@ -5,8 +5,9 @@
  * Optimisé avec Redis pour les performances de lecture (cache-aside).
  */
 import { productsRepo, inventoryRepo, categoriesRepo } from '../repositories/index.js';
-import { AppError } from '../utils/appError.js';
+import { AppError, ConflictError, BusinessError } from '../utils/appError.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
+import { PRODUCT_STATUS } from '../constants/enums.js';
 import { pgPool } from '../config/database.js';
 import { cacheService } from './cache.service.js';
 import { logInfo } from '../utils/logger.js';
@@ -24,9 +25,6 @@ class ProductService {
         return `product:${type}:${identifier}`;
     }
 
-    /**
-     * Invalide tout le cache lié à un produit spécifique et les listes globales.
-     */
     async #invalidateProductCache(productId, slug) {
         const keys = [
             this.#getCacheKey('details', productId),
@@ -45,8 +43,8 @@ class ProductService {
             productsRepo.findVariantBySku(sku),
         ]);
 
-        if (existingSlug) throw new AppError(`Le slug '${slug}' est déjà utilisé.`, HTTP_STATUS.CONFLICT);
-        if (existingSku) throw new AppError(`Le SKU '${sku}' est déjà utilisé.`, HTTP_STATUS.CONFLICT);
+        if (existingSlug) throw new ConflictError(`Le slug '${slug}' est déjà utilisé.`);
+        if (existingSku) throw new ConflictError(`Le SKU '${sku}' est déjà utilisé.`);
     }
 
     #safeParseAttributes(attributesInput) {
@@ -79,7 +77,7 @@ class ProductService {
      * Résout le prix promotionnel le plus bas parmi toutes les variantes d'un produit.
      * Parcourt l'ensemble des variantes pour ne pas rater une promo sur une variante non-0.
      *
-     * @param {object[]} variants - Tableau de variantes avec leur champ `promotion`.
+     * @param {object[]} variants      - Tableau de variantes avec leur champ `promotion`.
      * @param {number}   startingPrice - Prix de base du produit (fallback).
      * @returns {number} Prix affiché en vitrine (promoé ou original).
      */
@@ -122,8 +120,7 @@ class ProductService {
     }
 
     async listCatalog(filters) {
-        const filterStr = JSON.stringify(filters);
-        const cacheKey = `catalog:list:${Buffer.from(filterStr).toString('base64')}`;
+        const cacheKey = `catalog:list:${Buffer.from(JSON.stringify(filters)).toString('base64')}`;
 
         const cachedList = await cacheService.get(cacheKey);
         if (cachedList) return cachedList;
@@ -131,7 +128,7 @@ class ProductService {
         const queryFilters = { ...filters };
 
         if (!queryFilters.status) {
-            queryFilters.status = 'ACTIVE';
+            queryFilters.status = PRODUCT_STATUS.ACTIVE;
         } else if (queryFilters.status === 'ALL') {
             delete queryFilters.status;
         }
@@ -292,10 +289,7 @@ class ProductService {
 
         const allVariants = await productsRepo.listVariantsByProduct(variant.productId);
         if (allVariants.length <= 1) {
-            throw new AppError(
-                'Un produit doit avoir au moins une variante.',
-                HTTP_STATUS.BAD_REQUEST
-            );
+            throw new BusinessError('Un produit doit avoir au moins une variante.');
         }
 
         await productsRepo.deleteVariantById(variantId);

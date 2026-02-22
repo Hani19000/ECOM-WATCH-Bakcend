@@ -7,7 +7,7 @@
  */
 import { pgPool } from '../config/database.js';
 import { mapRow, mapRows } from './_mappers.js';
-import { PRODUCT_STATUS, isValidEnum as validateProductEnum } from '../constants/enums.js';
+import { PRODUCT_STATUS, isValidEnum } from '../constants/enums.js';
 import { validateRequired, validateSlug } from '../utils/validation.js';
 import { NotFoundError, assertExists } from '../utils/appError.js';
 
@@ -15,7 +15,7 @@ export const productsRepo = {
   async create({ name, slug, description, status = PRODUCT_STATUS.DRAFT }, client = pgPool) {
     validateRequired({ name, slug }, ['name', 'slug']);
     validateSlug(slug);
-    validateProductEnum(status, PRODUCT_STATUS, 'status');
+    isValidEnum(status, PRODUCT_STATUS, 'status');
 
     const { rows } = await client.query(
       `INSERT INTO products (name, slug, description, status) VALUES ($1, $2, $3, $4) RETURNING *`,
@@ -45,13 +45,11 @@ export const productsRepo = {
     let queryIndex = 1;
     const conditions = [];
 
-    // 1. FILTRE PAR STATUT (Ignore 'ALL' pour la vue Admin)
     if (status && status !== 'ALL') {
       conditions.push(`p.status = $${queryIndex++}`);
       params.push(status);
     }
 
-    // 2. AUTRES FILTRES
     if (categorySlug) {
       conditions.push(`c.slug = $${queryIndex++}`);
       params.push(categorySlug);
@@ -61,11 +59,10 @@ export const productsRepo = {
       params.push(JSON.stringify({ size }));
     }
 
-    // 3. RECHERCHE PAR MOT-CLÉ (Nom du produit, Description ou SKU Variante)
     if (search) {
       conditions.push(`(
-            p.name ILIKE $${queryIndex} OR 
-            p.description ILIKE $${queryIndex} OR 
+            p.name ILIKE $${queryIndex} OR
+            p.description ILIKE $${queryIndex} OR
             v.sku ILIKE $${queryIndex}
         )`);
       params.push(`%${search}%`);
@@ -74,9 +71,6 @@ export const productsRepo = {
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
-    // Le JOIN reste identique, il inclut les variantes (v) qui permettent de chercher par SKU
-    // Le LEFT JOIN categories est toujours actif pour exposer category_name dans la liste.
-    // Quand categorySlug est fourni, on bascule en INNER JOIN pour filtrer.
     const joinClause = categorySlug
       ? `LEFT JOIN product_variants v ON p.id = v.product_id
            JOIN product_categories pc ON p.id = pc.product_id
@@ -85,19 +79,16 @@ export const productsRepo = {
            LEFT JOIN product_categories pc ON p.id = pc.product_id
            LEFT JOIN categories c ON c.id = pc.category_id`;
 
-    // 4. COMPTAGE TOTAL (Pour la pagination)
     const { rows: countRows } = await client.query(
       `SELECT COUNT(DISTINCT p.id) FROM products p ${joinClause} ${whereClause}`,
       params
     );
-    const total = parseInt(countRows[0].count);
+    const total = parseInt(countRows[0].count, 10);
 
-    // 5. AJOUT LIMIT ET OFFSET
     const limitIdx = queryIndex++;
     const offsetIdx = queryIndex++;
     const dataParams = [...params, limit, offset];
 
-    // 6. REQUÊTE PRINCIPALE
     const { rows } = await client.query(
       `SELECT
                 p.*,
@@ -181,7 +172,7 @@ export const productsRepo = {
 
   async update(id, { name, slug, description, status }, client = pgPool) {
     if (slug) validateSlug(slug);
-    if (status) validateProductEnum(status, PRODUCT_STATUS, 'status');
+    if (status) isValidEnum(status, PRODUCT_STATUS, 'status');
 
     const updates = [];
     const params = [id];
@@ -373,12 +364,12 @@ export const productsRepo = {
              WHERE v.id = ANY($1::uuid[])`,
       [ids]
     );
-    return rows.map((r) => ({ id: r.id, stock: parseInt(r.stock) }));
+    return rows.map((r) => ({ id: r.id, stock: parseInt(r.stock, 10) }));
   },
 
   async count(client = pgPool) {
     const { rows } = await client.query('SELECT COUNT(*) FROM products');
-    return parseInt(rows[0].count);
+    return parseInt(rows[0].count, 10);
   },
 
   async countLowStock(threshold = 5, client = pgPool) {
@@ -389,26 +380,22 @@ export const productsRepo = {
        WHERE COALESCE(i.available_stock, 0) <= $1`,
       [threshold]
     );
-    return parseInt(rows[0].count);
+    return parseInt(rows[0].count, 10);
   },
 
   /**
- *
- * @method findActivePromotionPrice
- * Responsabilité : résoudre le prix effectif d'une variante en tenant compte
- * des promotions actives (variante ou produit entier), à l'intérieur
- * d'une transaction externe.
- * 
- * - La logique promotion est du domaine "produit", pas "stock".
- * - La séparation des responsabilités interdit à inventoryRepo de connaître
- *   la structure des promotions.
- * - Cette méthode accepte un `client` pour s'exécuter dans la même transaction
- *   que la réservation de stock, garantissant une vue cohérente de la DB.
- *
- * @param {string} variantId - UUID de la variante
- * @param {import('pg').PoolClient} client - Client de transaction
- * @returns {Promise<{ basePrice: number, effectivePrice: number, hasPromotion: boolean }>}
- */
+   * @method findActivePromotionPrice
+   * Résout le prix effectif d'une variante en tenant compte des promotions actives
+   * (variante ou produit entier), à l'intérieur d'une transaction externe.
+   *
+   * La logique promotion appartient au domaine "produit", pas "stock".
+   * Cette méthode accepte un `client` pour s'exécuter dans la même transaction
+   * que la réservation de stock, garantissant une vue cohérente de la DB.
+   *
+   * @param {string} variantId - UUID de la variante
+   * @param {import('pg').PoolClient} client - Client de transaction
+   * @returns {Promise<{ basePrice: number, effectivePrice: number, hasPromotion: boolean }>}
+   */
   async findActivePromotionPrice(variantId, client = pgPool) {
     const { rows } = await client.query(
       `SELECT
@@ -434,7 +421,6 @@ export const productsRepo = {
             END                                                          AS effective_price,
             (promo_v.id IS NOT NULL OR promo_p.id IS NOT NULL)          AS has_promotion
         FROM product_variants v
-        -- Priorité 1 : promotion liée directement à la variante
         LEFT JOIN variant_promotions vp
             ON v.id = vp.variant_id
         LEFT JOIN promotions promo_v
@@ -442,7 +428,6 @@ export const productsRepo = {
             AND promo_v.status      = 'ACTIVE'
             AND promo_v.start_date <= NOW()
             AND promo_v.end_date   >= NOW()
-        -- Priorité 2 : promotion liée au produit entier
         LEFT JOIN product_promotions pp
             ON v.product_id = pp.product_id
         LEFT JOIN promotions promo_p

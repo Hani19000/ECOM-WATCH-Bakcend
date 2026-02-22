@@ -6,8 +6,9 @@
  */
 import { shipmentsRepo, ordersRepo, addressesRepo } from '../repositories/index.js';
 import { cacheService } from './cache.service.js';
-import { AppError } from '../utils/appError.js';
+import { AppError, ValidationError, BusinessError } from '../utils/appError.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
+import { ORDER_STATUS } from '../constants/enums.js';
 
 class ShippingService {
     // Grille tarifaire centralisée par zone géographique.
@@ -60,9 +61,8 @@ class ShippingService {
         const rates = this.#shippingRates[zone];
 
         if (!rates || !rates[shippingMethod]) {
-            throw new AppError(
-                `Méthode de livraison "${shippingMethod}" non disponible pour ${country}`,
-                HTTP_STATUS.BAD_REQUEST
+            throw new ValidationError(
+                `Méthode de livraison "${shippingMethod}" non disponible pour ${country}`
             );
         }
 
@@ -137,7 +137,7 @@ class ShippingService {
         const rate = this.#shippingRates[zone]?.STANDARD;
 
         if (!rate) {
-            throw new AppError('Zone de livraison non supportée', HTTP_STATUS.BAD_REQUEST);
+            throw new ValidationError('Zone de livraison non supportée');
         }
 
         return {
@@ -180,8 +180,8 @@ class ShippingService {
         const order = await ordersRepo.findById(orderId);
         if (!order) throw new AppError('Commande introuvable', HTTP_STATUS.NOT_FOUND);
 
-        if (order.status !== 'PAID') {
-            throw new AppError('La commande doit être payée avant expédition', HTTP_STATUS.BAD_REQUEST);
+        if (order.status !== ORDER_STATUS.PAID) {
+            throw new BusinessError('La commande doit être payée avant expédition');
         }
 
         const trackingNumber = `${carrier.substring(0, 3)}-${Math.random()
@@ -227,7 +227,7 @@ class ShippingService {
     async getShipmentForUser(orderId, userId) {
         const order = await ordersRepo.findById(orderId);
 
-        // Vérification de propriété
+        // Vérification de propriété avant exposition des données d'expédition.
         if (!order || order.userId !== userId) {
             throw new AppError('Accès non autorisé à cette expédition', HTTP_STATUS.FORBIDDEN);
         }

@@ -7,7 +7,7 @@
 import { orderService } from '../services/orders.service.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
-import { AppError } from '../utils/appError.js';
+import { ValidationError } from '../utils/appError.js';
 
 class OrderController {
     /**
@@ -49,11 +49,11 @@ class OrderController {
         } = req.body;
 
         if (!items || !Array.isArray(items) || items.length === 0) {
-            throw new AppError('Le panier est vide', HTTP_STATUS.BAD_REQUEST);
+            throw new ValidationError('Le panier est vide');
         }
 
         if (!shippingAddress) {
-            throw new AppError('Adresse de livraison manquante', HTTP_STATUS.BAD_REQUEST);
+            throw new ValidationError('Adresse de livraison manquante');
         }
 
         const order = await orderService.createOrderFromCart(req.user?.id ?? null, {
@@ -77,9 +77,7 @@ class OrderController {
     /**
      * POST /api/v1/orders/:orderId/cancel
      * Annule une commande PENDING et libère le stock réservé.
-     *
      * Accessible en mode guest (avec ?email=) et authentifié.
-     * Utilisé par le frontend sur la page /checkout/cancel.
      */
     cancelOrder = asyncHandler(async (req, res) => {
         const { orderId } = req.params;
@@ -92,7 +90,6 @@ class OrderController {
             message: result.message,
         });
     });
-
 
     /**
      * POST /api/v1/orders/track-guest
@@ -132,8 +129,6 @@ class OrderController {
 
     /**
      * GET /api/v1/orders/:orderId
-     * Récupère les détails d'une commande.
-     *
      * Mode authentifié : vérifie la propriété via req.user.
      * Mode guest : requiert ?email= pour vérification timing-safe côté service.
      */
@@ -150,10 +145,7 @@ class OrderController {
         }
 
         if (!email || email.trim() === '') {
-            throw new AppError(
-                'Email requis pour accéder aux détails de la commande',
-                HTTP_STATUS.BAD_REQUEST
-            );
+            throw new ValidationError('Email requis pour accéder aux détails de la commande');
         }
 
         const order = await orderService.getOrderDetailsGuest(orderId, email);
@@ -172,13 +164,9 @@ class OrderController {
      * GET /api/v1/orders/my-orders
      * Historique paginé des commandes de l'utilisateur connecté.
      *
-     * FIX : délégation à getOrderHistory (pagination réelle) au lieu de getUserOrders
-     * (qui chargeait toutes les commandes sans paginer, rendant la pagination UI
-     * inopérante pour les utilisateurs avec plus de 10 commandes).
-     *
-     * La pagination est gérée en mémoire dans le service — acceptable pour
-     * des volumes normaux d'utilisateurs. Une migration vers une pagination
-     * SQL serait pertinente si le P99 de getUserOrders dépasse ~100ms.
+     * Délègue à getOrderHistory (pagination réelle) plutôt qu'à getUserOrders
+     * qui chargeait toutes les commandes sans paginer, rendant la pagination UI
+     * inopérante au-delà de 10 commandes.
      */
     getMyOrders = asyncHandler(async (req, res) => {
         const page = parseInt(req.query.page, 10) || 1;
@@ -204,7 +192,7 @@ class OrderController {
         const queryParams = {
             status: req.query.status || null,
             userId: req.query.userId || null,
-            search: req.query.search || null, // NOUVEAU : Récupération du mot-clé
+            search: req.query.search || null,
             page: parseInt(req.query.page, 10) || 1,
             limit: parseInt(req.query.limit, 10) || 20,
         };
@@ -219,6 +207,7 @@ class OrderController {
             },
         });
     });
+
     /**
      * PATCH /api/v1/orders/:orderId/status
      * ADMINISTRATION : Met à jour le statut d'une commande.

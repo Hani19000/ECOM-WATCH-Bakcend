@@ -17,7 +17,7 @@ import { archiveJob } from './cron/archive.cron.js';
  */
 export function initializeCronJobs() {
     cronScheduler.registerMany([
-        inventoryCleanupJob,  // Toutes les heures
+        inventoryCleanupJob,  // Toutes les 15 minutes (*/15 * * * *)
         sessionsCleanupJob,   // 1x/jour à 3h
         ordersCleanupJob,     // 1x/jour à 3h30
         statsRefreshJob,      // Toutes les heures

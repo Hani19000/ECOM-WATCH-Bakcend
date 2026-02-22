@@ -1,27 +1,6 @@
 -- ================================================================
 -- MIGRATION 002 — OPTIMISATIONS PRODUCTION
 -- ================================================================
--- Version : 2.1
--- ✅ CORRECTIONS APPLIQUÉES :
---   - CREATE INDEX CONCURRENTLY sorti du BEGIN/COMMIT (interdit par PostgreSQL)
---   - idx_refresh_tokens_expires : condition volatile NOW() supprimée
---   - Index redondants supprimés (couverts par init ou par d'autres index 002)
---   - GIN index shipping/billing supprimés (trop coûteux pour leur utilité réelle)
---   - archive_old_orders() rendue atomique (transaction interne)
---   - Étapes clairement séparées : index (hors transaction) puis objets (en transaction)
---
--- ⚠️  ORDRE D'EXÉCUTION OBLIGATOIRE :
---   PARTIE 1 : Index CONCURRENTLY (hors transaction, exécuter séparément ou via psql)
---   PARTIE 2 : Fonctions, vues, contraintes (dans BEGIN/COMMIT)
--- ================================================================
-
-
--- ================================================================
--- PARTIE 1 — INDEX CONCURRENTLY
--- ⚠️ CREATE INDEX CONCURRENTLY est INTERDIT dans une transaction.
---   Ces commandes doivent être exécutées HORS de tout bloc BEGIN/COMMIT.
---   En pratique : psql les exécute une par une, c'est correct.
--- ================================================================
 
 -- ─── orders : Auto-claim guest ──────────────────────────────────────────────
 -- Couvert par init-postgres.sql si tu repartes de zéro.
@@ -87,23 +66,7 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_password_history_user_created
 COMMENT ON INDEX idx_password_history_user_created IS 
     'Optimisation de la vérification de l''historique des MDP (Service Layer)';
 
--- ─── INDEX SUPPRIMÉS (vs version originale) ─────────────────────────────────
--- idx_orders_shipping_address_gin : GIN JSONB complet = +30-50% taille DB,
---   écritures 3-4x plus lentes. idx_orders_guest_email suffit pour l'auto-claim.
--- idx_orders_billing_address_gin  : idem, aucune requête réelle connue.
--- idx_users_email                 : couvert par la contrainte UNIQUE (index automatique).
--- idx_orders_user                 : redondant avec idx_orders_user_status.
--- idx_orders_status               : redondant avec idx_orders_status_created.
--- idx_orders_created              : redondant avec idx_orders_user_created.
--- idx_payments_intent_id (init)   : doublon exact de idx_payments_intent (ci-dessus).
--- idx_inventory_stock             : inutile (les requêtes cherchent par variant_id = PK).
--- idx_orders_shipping_method      : 3 valeurs → sélectivité < 5%, seq scan plus rapide.
 
-
--- ================================================================
--- PARTIE 2 — OBJETS TRANSACTIONNELS
--- (Fonctions, vues matérialisées, contraintes — peuvent être dans BEGIN/COMMIT)
--- ================================================================
 
 BEGIN;
 
@@ -425,47 +388,3 @@ COMMENT ON FUNCTION cleanup_expired_tokens() IS
     'Supprime les refresh tokens ET les password reset tokens expirés (cron quotidien)';
 
 SELECT 'Migration 003 terminée' AS status;
-
--- ================================================================
--- PARAMÈTRES POSTGRESQL.CONF RECOMMANDÉS (à configurer manuellement)
--- ================================================================
-/*
--- Mémoire (adapter à la RAM disponible)
-shared_buffers        = 256MB    -- 25% de la RAM
-effective_cache_size  = 1GB      -- 50-75% de la RAM
-work_mem              = 16MB     -- Par opération de tri / jointure
-maintenance_work_mem  = 128MB    -- VACUUM, CREATE INDEX
-
--- Performances SSD
-random_page_cost         = 1.1   -- SSD (défaut 4.0 pour HDD)
-effective_io_concurrency = 200   -- SSD (défaut 1 pour HDD)
-
--- Autovacuum
-autovacuum             = on
-autovacuum_max_workers = 3
-autovacuum_naptime     = 1min
-
--- Logging
-log_min_duration_statement = 1000   -- Log les requêtes > 1s
-log_lock_waits             = on
-log_checkpoints            = on
-
--- Monitoring
-shared_preload_libraries = 'pg_stat_statements'
-pg_stat_statements.track = all
-*/
-
--- ================================================================
--- CRON JOBS À CONFIGURER (pg_cron ou cron système)
--- ================================================================
-/*
--- Quotidien à 3h du matin
-SELECT cron.schedule('cleanup-tokens',    '0 3 * * *', 'SELECT cleanup_expired_tokens()');
-SELECT cron.schedule('cleanup-orders',    '0 4 * * *', 'SELECT cleanup_abandoned_orders()');
-
--- Toutes les heures
-SELECT cron.schedule('refresh-stats',     '0 * * * *', 'SELECT refresh_stats()');
-
--- Mensuel le 1er à 2h
-SELECT cron.schedule('archive-orders',   '0 2 1 * *', 'SELECT archive_old_orders()');
-*/

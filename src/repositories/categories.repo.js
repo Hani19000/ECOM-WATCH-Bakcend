@@ -15,7 +15,7 @@ export const categoriesRepo = {
   /**
    * Crée une catégorie.
    * Retourne null si un conflit de slug survient plutôt que de lever une erreur —
-   * le service lève une AppError avec un message métier plus explicite.
+   * le service lève une ConflictError avec un message métier plus explicite.
    */
   async create({ name, slug }) {
     try {
@@ -28,7 +28,7 @@ export const categoriesRepo = {
       return mapRow(rows[0]);
     } catch (error) {
       if (error.code === '23505') return null;
-      logError(error, { method: 'categoriesRepo.create', name, slug });
+      logError(error, { context: 'categoriesRepo.create', name, slug });
       throw error;
     }
   },
@@ -42,7 +42,7 @@ export const categoriesRepo = {
       );
       return mapRow(rows[0]);
     } catch (error) {
-      logError(error, { method: 'categoriesRepo.findById', id });
+      logError(error, { context: 'categoriesRepo.findById', id });
       throw error;
     }
   },
@@ -55,7 +55,7 @@ export const categoriesRepo = {
       );
       return mapRow(rows[0]);
     } catch (error) {
-      logError(error, { method: 'categoriesRepo.findBySlug', slug });
+      logError(error, { context: 'categoriesRepo.findBySlug', slug });
       throw error;
     }
   },
@@ -67,7 +67,7 @@ export const categoriesRepo = {
       );
       return mapRows(rows);
     } catch (error) {
-      logError(error, { method: 'categoriesRepo.list' });
+      logError(error, { context: 'categoriesRepo.list' });
       throw error;
     }
   },
@@ -90,7 +90,7 @@ export const categoriesRepo = {
       );
       return mapRow(rows[0]);
     } catch (error) {
-      logError(error, { method: 'categoriesRepo.addProductCategory', productId, categoryId });
+      logError(error, { context: 'categoriesRepo.addProductCategory', productId, categoryId });
       throw error;
     }
   },
@@ -113,7 +113,7 @@ export const categoriesRepo = {
       );
       return rowCount > 0;
     } catch (error) {
-      logError(error, { method: 'categoriesRepo.removeProductCategory', productId, categoryId });
+      logError(error, { context: 'categoriesRepo.removeProductCategory', productId, categoryId });
       throw error;
     }
   },
@@ -131,7 +131,7 @@ export const categoriesRepo = {
       );
       return mapRows(rows);
     } catch (error) {
-      logError(error, { method: 'categoriesRepo.listByProductId', productId });
+      logError(error, { context: 'categoriesRepo.listByProductId', productId });
       throw error;
     }
   },
@@ -150,7 +150,7 @@ export const categoriesRepo = {
       );
       return mapRow(rows[0]);
     } catch (error) {
-      logError(error, { method: 'categoriesRepo.update', id, data });
+      logError(error, { context: 'categoriesRepo.update', id });
       throw error;
     }
   },
@@ -164,7 +164,7 @@ export const categoriesRepo = {
       );
       return rowCount > 0;
     } catch (error) {
-      logError(error, { method: 'categoriesRepo.delete', id });
+      logError(error, { context: 'categoriesRepo.delete', id });
       throw error;
     }
   },

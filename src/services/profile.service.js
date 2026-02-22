@@ -9,8 +9,9 @@
  * - Defense in depth : exclusion des champs sensibles même si le repo les retourne
  */
 import { usersRepo, ordersRepo } from '../repositories/index.js';
-import { AppError } from '../utils/appError.js';
+import { AppError, ValidationError, BusinessError } from '../utils/appError.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
+import { ORDER_STATUS } from '../constants/enums.js';
 import { logInfo, logError } from '../utils/logger.js';
 
 class ProfileService {
@@ -37,8 +38,8 @@ class ProfileService {
         const stats = {
             totalOrders: orders.length,
             totalSpent: orders.reduce((sum, order) => sum + (order.totalAmount || 0), 0),
-            pendingOrders: orders.filter((o) => o.status === 'PENDING').length,
-            completedOrders: orders.filter((o) => o.status === 'DELIVERED').length,
+            pendingOrders: orders.filter((o) => o.status === ORDER_STATUS.PENDING).length,
+            completedOrders: orders.filter((o) => o.status === ORDER_STATUS.DELIVERED).length,
         };
 
         const { passwordHash, salt, ...safeUser } = user;
@@ -54,10 +55,7 @@ class ProfileService {
         const { firstName, lastName, phone } = updates;
 
         if (!firstName && !lastName && !phone) {
-            throw new AppError(
-                'Au moins un champ doit être fourni pour la mise à jour',
-                HTTP_STATUS.BAD_REQUEST
-            );
+            throw new ValidationError('Au moins un champ doit être fourni pour la mise à jour');
         }
 
         const sanitizedUpdates = {
@@ -69,7 +67,7 @@ class ProfileService {
         if (sanitizedUpdates.phone) {
             const phoneRegex = /^[+]?[(]?[0-9]{1,4}[)]?[-\s.]?[(]?[0-9]{1,4}[)]?[-\s.]?[0-9]{1,9}$/;
             if (!phoneRegex.test(sanitizedUpdates.phone)) {
-                throw new AppError('Format de téléphone invalide', HTTP_STATUS.BAD_REQUEST);
+                throw new ValidationError('Format de téléphone invalide');
             }
         }
 
@@ -101,7 +99,7 @@ class ProfileService {
         const parsedLimit = parseInt(limit, 10);
 
         if (parsedPage < 1 || parsedLimit < 1 || parsedLimit > 100) {
-            throw new AppError('Paramètres de pagination invalides', HTTP_STATUS.BAD_REQUEST);
+            throw new ValidationError('Paramètres de pagination invalides');
         }
 
         const offset = (parsedPage - 1) * parsedLimit;
@@ -141,7 +139,7 @@ class ProfileService {
      */
     async trackOrderGuest(orderNumber, email) {
         if (!orderNumber || !email) {
-            throw new AppError('Numéro de commande et email requis', HTTP_STATUS.BAD_REQUEST);
+            throw new ValidationError('Numéro de commande et email requis');
         }
 
         const sanitizedOrderNumber = String(orderNumber).trim().toUpperCase();
@@ -177,7 +175,7 @@ class ProfileService {
         } catch (error) {
             if (error instanceof AppError) throw error;
 
-            logError(error, { action: 'trackOrderGuest', orderNumber: sanitizedOrderNumber });
+            logError(error, { context: 'ProfileService.trackOrderGuest', orderNumber: sanitizedOrderNumber });
             await this.#artificialDelay();
             throw new AppError(
                 'Commande introuvable. Vérifiez vos informations.',
@@ -200,8 +198,8 @@ class ProfileService {
             logInfo(`Commande ${orderId} transférée à l'utilisateur ${newUserId}`);
             return transferredOrder;
         } catch (error) {
-            logError(error, { action: 'claimGuestOrder', orderId, newUserId });
-            throw new AppError('Impossible de rattacher cette commande', HTTP_STATUS.BAD_REQUEST);
+            logError(error, { context: 'ProfileService.claimGuestOrder', orderId, newUserId });
+            throw new BusinessError('Impossible de rattacher cette commande');
         }
     }
 
@@ -223,7 +221,7 @@ class ProfileService {
                     const claimed = await ordersRepo.transferOwnership(order.id, newUserId, email);
                     claimedOrders.push(claimed);
                 } catch (error) {
-                    logError(error, { action: 'autoClaimGuestOrders', orderId: order.id });
+                    logError(error, { context: 'ProfileService.autoClaimGuestOrders', orderId: order.id });
                 }
             }
 
@@ -231,8 +229,8 @@ class ProfileService {
             return { claimed: claimedOrders.length, orders: claimedOrders };
 
         } catch (error) {
-            logError(error, { action: 'autoClaimGuestOrders', newUserId });
-            // L'inscription ne doit pas échouer si le claim échoue
+            logError(error, { context: 'ProfileService.autoClaimGuestOrders', newUserId });
+            // L'inscription ne doit pas échouer si le claim échoue.
             return { claimed: 0, orders: [], error: error.message };
         }
     }

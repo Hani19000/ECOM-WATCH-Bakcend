@@ -54,16 +54,15 @@ export const inventoryRepo = {
        SET available_stock = i.available_stock - $2,
            reserved_stock  = i.reserved_stock + $2,
            updated_at      = NOW()
-       FROM product_variants pv -- Jointure pour récupérer le prix
-       WHERE i.variant_id = pv.id 
-         AND i.variant_id = $1 
+       FROM product_variants pv
+       WHERE i.variant_id = pv.id
+         AND i.variant_id = $1
          AND i.available_stock >= $2
-       RETURNING i.*, pv.price`, // On retourne le prix réel
+       RETURNING i.*, pv.price`,
       [variantId, quantity]
     );
 
     if (rows.length === 0) {
-      // Distinguer "variante inconnue" de "stock insuffisant" pour des messages d'erreur précis
       const existing = await this.findByVariantId(variantId);
       if (!existing) throw new NotFoundError('Inventory', variantId);
 
@@ -76,9 +75,8 @@ export const inventoryRepo = {
   },
 
   /**
-   * Restitue du stock réservé vers le disponible (annulation de commande ou d'un panier expiré).
-   * GREATEST(0, ...) protège contre un reserved_stock qui passerait négatif
-   * suite à un désynchronisation éventuelle.
+   * Restitue du stock réservé vers le disponible (annulation de commande ou panier expiré).
+   * GREATEST(0, ...) protège contre un reserved_stock négatif suite à une désynchronisation.
    */
   async release(variantId, quantity, client = pgPool) {
     validateUUID(variantId, 'variantId');
@@ -127,8 +125,8 @@ export const inventoryRepo = {
   },
 
   /**
-     * Liste tout l'inventaire pour le tableau d'administration avec filtres et pagination.
-     */
+   * Liste tout l'inventaire pour le tableau d'administration avec filtres et pagination.
+   */
   async findAll({ page = 1, limit = 15, search = '' }) {
     const offset = (page - 1) * limit;
     const values = [];
@@ -157,7 +155,7 @@ export const inventoryRepo = {
     `;
 
     const countQuery = `
-      SELECT COUNT(*) 
+      SELECT COUNT(*)
       FROM inventory i
       JOIN product_variants pv ON i.variant_id = pv.id
       JOIN products p ON pv.product_id = p.id
@@ -286,11 +284,11 @@ export const inventoryRepo = {
     );
 
     return {
-      totalVariants: parseInt(rows[0].total_variants),
-      totalAvailable: parseInt(rows[0].total_available),
-      totalReserved: parseInt(rows[0].total_reserved),
-      outOfStockCount: parseInt(rows[0].out_of_stock_count),
-      lowStockCount: parseInt(rows[0].low_stock_count),
+      totalVariants: parseInt(rows[0].total_variants, 10),
+      totalAvailable: parseInt(rows[0].total_available, 10),
+      totalReserved: parseInt(rows[0].total_reserved, 10),
+      outOfStockCount: parseInt(rows[0].out_of_stock_count, 10),
+      lowStockCount: parseInt(rows[0].low_stock_count, 10),
     };
   },
 };

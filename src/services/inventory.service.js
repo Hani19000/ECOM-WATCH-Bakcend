@@ -5,11 +5,12 @@
  * et le nettoyage des réservations expirées.
  */
 import { inventoryRepo, productsRepo, ordersRepo } from '../repositories/index.js';
-import { AppError, BusinessError } from '../utils/appError.js';
+import { AppError, ValidationError, BusinessError } from '../utils/appError.js';
 import { cacheService } from './cache.service.js';
 import { logError } from '../utils/logger.js';
 import { pgPool } from '../config/database.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
+import { ORDER_STATUS } from '../constants/enums.js';
 
 class InventoryService {
     // Seuil centralisé ici pour qu'un seul changement impacte alertes et dashboard.
@@ -32,7 +33,7 @@ class InventoryService {
                 limit: parseInt(params.limit, 10) || 15,
                 total,
                 totalPages: Math.ceil(total / (params.limit || 15)),
-            }
+            },
         };
     }
 
@@ -44,7 +45,7 @@ class InventoryService {
             if (cached) return cached;
         } catch (error) {
             // Si Redis est indisponible, on continue vers la DB — résilience prioritaire.
-            logError(error, { context: 'InventoryService getStockLevel', variantId });
+            logError(error, { context: 'InventoryService.getStockLevel', variantId });
         }
 
         const inventory = await inventoryRepo.findByVariantId(variantId);
@@ -64,18 +65,18 @@ class InventoryService {
             await cacheService.delete(`${this.#CACHE_PREFIX}${variantId}`);
 
             const variant = await productsRepo.findVariantById(variantId);
-            if (variant && variant.productId) {
+            if (variant?.productId) {
                 const product = await productsRepo.findById(variant.productId);
                 if (product) {
                     await cacheService.deleteMany([
                         `product:details:${product.id}`,
                         `product:details:${product.slug}`,
-                        'catalog:list:*'
+                        'catalog:list:*',
                     ]);
                 }
             }
         } catch (error) {
-            logError(error, { context: 'InventoryService invalidateCache', variantId });
+            logError(error, { context: 'InventoryService.invalidateCache', variantId });
         }
     }
 
@@ -116,10 +117,10 @@ class InventoryService {
     }
 
     async reserveStock(variantId, quantity, client = null) {
-        // Vérification en DB (source de vérité) avant toute mutation de stock
+        // Vérification en DB (source de vérité) avant toute mutation de stock.
         const inventory = await inventoryRepo.findByVariantId(variantId);
         if (!inventory || inventory.availableStock < quantity) {
-            throw new AppError('Stock insuffisant', HTTP_STATUS.CONFLICT);
+            throw new BusinessError('Stock insuffisant');
         }
 
         const result = await inventoryRepo.reserve(variantId, quantity, client);
@@ -148,8 +149,8 @@ class InventoryService {
                     await this.#invalidateCache(item.variantId);
                 }
                 await client.query(
-                    "UPDATE orders SET status = 'CANCELLED', updated_at = NOW() WHERE id = $1",
-                    [order.id]
+                    `UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2`,
+                    [ORDER_STATUS.CANCELLED, order.id]
                 );
             }
             await client.query('COMMIT');
@@ -164,10 +165,7 @@ class InventoryService {
 
     async restockVariant(variantId, quantity) {
         if (quantity <= 0) {
-            throw new AppError(
-                'La quantité à ajouter doit être supérieure à 0',
-                HTTP_STATUS.BAD_REQUEST
-            );
+            throw new ValidationError('La quantité à ajouter doit être supérieure à 0');
         }
 
         const updatedStock = await inventoryRepo.addStock(variantId, quantity);
