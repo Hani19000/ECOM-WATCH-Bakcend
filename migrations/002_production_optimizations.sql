@@ -44,8 +44,6 @@ COMMENT ON INDEX idx_orders_pending_old IS
     'Cron de nettoyage : commandes PENDING > 24h à annuler';
 
 -- ─── refresh_tokens : Nettoyage des tokens expirés ─────────────────────────
--- ✅ FIX : La version originale avait WHERE expires_at < NOW() + INTERVAL '7 days'
--- PostgreSQL rejette les fonctions volatiles (NOW()) dans les conditions d'index partiels.
 -- Index simple sur expires_at : le cron filtre lui-même WHERE expires_at < NOW().
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_refresh_tokens_expires
     ON refresh_tokens(expires_at);
@@ -97,7 +95,6 @@ CREATE TABLE IF NOT EXISTS orders_archive (
 COMMENT ON TABLE orders_archive IS
     'Archive des commandes > 2 ans (hors requêtes de production)';
 
--- ✅ FIX : Fonction rendue ATOMIQUE via une transaction interne.
 -- La version originale faisait INSERT puis DELETE séparément :
 -- un crash entre les deux pouvait dupliquer ou perdre des données.
 CREATE OR REPLACE FUNCTION archive_old_orders()
@@ -170,7 +167,7 @@ BEGIN
     )
     SELECT COUNT(*) INTO count_cancelled FROM cancelled;
 
-    -- ⚠️ TODO : Appeler inventoryRepo.release() pour libérer le stock réservé
+    -- TODO : Appeler inventoryRepo.release() pour libérer le stock réservé
     -- Cette logique est gérée dans orders_service.js#updateOrderStatus côté Node.js
 
     RETURN QUERY SELECT count_cancelled;
@@ -278,7 +275,7 @@ WHERE schemaname = 'public'
   AND indexrelname NOT LIKE '%_pkey'
 ORDER BY pg_relation_size(indexrelid) DESC;
 
-SELECT '✅ Migration 002 terminée' AS status;
+SELECT 'Migration 002 terminée' AS status;
 
 COMMIT;
 

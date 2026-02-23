@@ -1,0 +1,216 @@
+# =============================================================================
+# WORKFLOW : Intégration Continue (CI)
+#
+# Déclenché sur chaque push et pull request vers main et develop.
+#
+# Pipeline :
+#   lint   -- vérification statique ESLint
+#   test   -- tests d'intégration avec PostgreSQL 15 et Redis 7 en services locaux
+#   build  -- vérification que l'image Docker se construit sans erreur
+#
+# "test" et "build" ne démarrent que si "lint" réussit.
+#
+# Note infrastructure :
+#   Les tests utilisent des services Docker locaux au runner (PostgreSQL + Redis)
+#   et non les services de production (Neon + Render Redis). Cela garantit
+#   l'isolation totale des tests vis-à-vis de la base de production.
+# =============================================================================
+
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+
+# Annule les runs en cours si un nouveau commit arrive sur la même branche.
+# Evite de consommer des minutes de CI sur du code déjà remplacé.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  # ---------------------------------------------------------------------------
+  # JOB 1 : LINT
+  # Vérification statique rapide, sans service externe.
+  # ---------------------------------------------------------------------------
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Installation des dépendances
+        run: npm ci
+
+      # La commande "lint" doit être définie dans package.json.
+      # Exemple : "lint": "eslint src/ --ext .js"
+      - name: ESLint
+        run: npm run lint
+
+
+  # ---------------------------------------------------------------------------
+  # JOB 2 : TESTS D'INTEGRATION
+  #
+  # Démarre PostgreSQL 15-alpine et Redis 7-alpine comme services Docker
+  # natifs du runner. Ils sont disponibles sur localhost avant le premier step.
+  #
+  # Le schéma est appliqué manuellement dans l'ordre correct :
+  #   1. init-postgres.sql                   -- schéma, types, triggers, seed
+  #   2. 002_production_optimizations.sql    -- index, vues, fonctions, password_history
+  # ---------------------------------------------------------------------------
+  test:
+    name: Tests d'intégration
+    runs-on: ubuntu-latest
+    needs: lint
+
+    services:
+
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ecom_watch_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ecom_watch_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    # Variables consommées par environment.js (validation fail-fast au démarrage).
+    # Les valeurs sensibles sont fictives -- elles n'ont aucun impact hors des tests.
+    env:
+      NODE_ENV: test
+
+      # Base de données locale du runner
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ecom_watch_test
+
+      # Redis local du runner
+      REDIS_HOST: localhost
+      REDIS_PORT: 6379
+
+      # JWT -- valeurs de test uniquement, jamais utilisées en production
+      JWT_ACCESS_SECRET: ci-access-secret-not-for-production
+      JWT_REFRESH_SECRET: ci-refresh-secret-not-for-production
+      JWT_ACCESS_EXPIRES_IN: 15m
+      JWT_REFRESH_EXPIRES_IN: 7d
+
+      # Stripe -- clé test sans impact financier
+      STRIPE_SECRET_KEY: sk_test_placeholder
+      STRIPE_WEBHOOK_SECRET: whsec_placeholder
+
+      # Cloudinary -- désactivé en test
+      CLOUDINARY_CLOUD_NAME: test
+      CLOUDINARY_API_KEY: test
+      CLOUDINARY_API_SECRET: test
+
+      # Email Resend -- désactivé en test
+      RESEND_API_KEY: re_test_placeholder
+      EMAIL_FROM: noreply@ecom-watch.local
+
+      # Application
+      CLIENT_URL: http://localhost:3000
+      PORT: 3001
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Installation des dépendances
+        run: npm ci
+
+      # Applique le schéma complet : tables, enums, triggers, données de test.
+      - name: Initialisation du schéma
+        run: |
+          PGPASSWORD=postgres psql \
+            -h localhost \
+            -U postgres \
+            -d ecom_watch_test \
+            -f init-postgres.sql
+
+      # Applique les optimisations : index, vues matérialisées, fonctions
+      # d'archivage, password_history et password_reset_tokens.
+      - name: Application de la migration 002
+        run: |
+          PGPASSWORD=postgres psql \
+            -h localhost \
+            -U postgres \
+            -d ecom_watch_test \
+            -f migrations/002_production_optimizations.sql
+
+      - name: Exécution des tests
+        run: npm test
+
+      # Upload du rapport de couverture. Non bloquant si CODECOV_TOKEN est absent.
+      - name: Upload couverture Codecov
+        uses: codecov/codecov-action@v4
+        if: always()
+        continue-on-error: true
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+
+
+  # ---------------------------------------------------------------------------
+  # JOB 3 : BUILD DOCKER
+  # L'image n'est pas publiée ici -- Render construit lui-même depuis GitHub.
+  # Ce job détecte les erreurs de Dockerfile avant qu'elles atteignent Render.
+  # ---------------------------------------------------------------------------
+  build:
+    name: Build Docker
+    runs-on: ubuntu-latest
+    needs: lint
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (vérification sans push)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: false
+          # Cache des layers entre les runs pour réduire la durée de vérification
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

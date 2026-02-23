@@ -24,7 +24,6 @@ import crypto from 'crypto';
 /**
  * Fragment json_build_object commun pour les agrégations d'items.
  *
- * FIX : Ajout du JOIN product_variants (pv) et du champ `image`.
  * L'image est lue directement depuis pv.attributes pour garantir
  * une URL valide indépendamment de ce qui était stocké dans
  * order_items.variant_attributes au moment du checkout.
@@ -140,12 +139,7 @@ export const ordersRepo = {
   // LECTURE — ACCÈS PUBLIC GUEST (barrière user_id IS NULL en SQL)
   // ─────────────────────────────────────────────────────────────────────
 
-  /**
-   * Récupération guest par UUID — barrière principale.
-   *
-   * FIX : LEFT JOIN product_variants pour exposer pv.attributes->>'image'
-   * dans chaque item via ITEM_JSON_OBJECT.
-   */
+
   async findGuestOnlyById(id) {
     validateUUID(id, 'orderId');
 
@@ -173,8 +167,6 @@ export const ordersRepo = {
   /**
    * Recherche guest par numéro + email — timing-safe.
    *
-   * FIX : LEFT JOIN product_variants pour exposer pv.attributes->>'image'
-   * dans chaque item via ITEM_JSON_OBJECT.
    */
   async findByOrderNumberAndEmail(orderNumber, email) {
     const orderNumberRegex = /^ORD-\d{4}-\d+$/;
@@ -297,10 +289,6 @@ export const ordersRepo = {
 
   /**
    * Retourne les items d'une commande enrichis de l'image courante de la variante.
-   *
-   * FIX : LEFT JOIN product_variants pour exposer pv.attributes->>'image' via
-   * l'alias `image`. mapRows convertit snake_case → camelCase ; `image` reste `image`.
-   *
    * Accepte un client optionnel pour s'exécuter dans une transaction externe.
    */
   async listItems(orderId, client = pgPool) {
