@@ -21,6 +21,7 @@ vi.mock('stripe', () => {
 // 2. MOCK ENV
 vi.mock('../config/environment.js', () => ({
     ENV: {
+        server: { nodeEnv: 'test' },
         stripe: { secretKey: 'sk_test', webhookSecret: 'wh_test' },
         PORT: 3000, POSTGRES_HOST: 'localhost', POSTGRES_PORT: 5432,
         POSTGRES_USER: 'test', POSTGRES_PASSWORD: 'test', POSTGRES_DB: 'test',

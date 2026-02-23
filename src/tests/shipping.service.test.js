@@ -26,15 +26,13 @@ describe('ShippingService', () => {
 
     describe('calculateShippingCost', () => {
         it('devrait calculer le tarif correct pour la France', () => {
-            // base 5.90 + (0.50 * 2) = 6.90
-            const cost = shippingService.calculateShippingCost('FRANCE', 2);
-            expect(cost).toBe(6.90);
+            const result = shippingService.calculateShippingCost('FRANCE', 2);
+            expect(result.cost).toBe(6.90);
         });
 
         it('devrait utiliser le tarif INTERNATIONAL par défaut', () => {
-            // base 25.00 + (5.00 * 1) = 30.00
-            const cost = shippingService.calculateShippingCost('MARS', 1);
-            expect(cost).toBe(30.00);
+            const result = shippingService.calculateShippingCost('MARS', 1);
+            expect(result.cost).toBe(30.00);
         });
     });
 

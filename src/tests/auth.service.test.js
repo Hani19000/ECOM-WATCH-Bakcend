@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// 1. Mocks des repositories et services
 vi.mock('../repositories/index.js', () => ({
     usersRepo: { findByEmail: vi.fn(), create: vi.fn(), findById: vi.fn(), count: vi.fn() },
     rolesRepo: { findByName: vi.fn(), addUserRole: vi.fn(), listUserRoles: vi.fn() }
@@ -18,7 +17,6 @@ vi.mock('../services/session.service.js', () => ({
     sessionService: { createSession: vi.fn(), deleteSession: vi.fn() }
 }));
 
-// 2. Imports
 import { authService } from '../services/auth.service.js';
 import { usersRepo, rolesRepo } from '../repositories/index.js';
 import { passwordService } from '../services/password.service.js';
@@ -29,7 +27,7 @@ describe('AuthService - Register', () => {
 
     it('devrait rejeter si l\'email existe déjà', async () => {
         usersRepo.findByEmail.mockResolvedValue({ id: '1', email: 'test@test.com' });
-        await expect(authService.register({}, { email: 'test@test.com' })).rejects.toThrow(AppError);
+        await expect(authService.register({ email: 'test@test.com' })).rejects.toThrow(AppError);
     });
 
     it('devrait créer un utilisateur avec un hash et un salt', async () => {
@@ -39,8 +37,7 @@ describe('AuthService - Register', () => {
         passwordService.hashPassword.mockResolvedValue('hashed-pwd');
         usersRepo.create.mockResolvedValue({ id: 'new-id', email: 'new@test.com' });
 
-        const res = { cookie: vi.fn() };
-        const result = await authService.register(res, {
+        const result = await authService.register({
             email: 'new@test.com',
             password: 'Password123',
             firstName: 'John',

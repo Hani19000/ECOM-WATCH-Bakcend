@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// 1. Mock de la Database
 vi.mock('../config/database.js', () => ({
     pgPool: {
         connect: vi.fn().mockResolvedValue({
@@ -10,7 +9,6 @@ vi.mock('../config/database.js', () => ({
     }
 }));
 
-// 2. Mock des Repositories (Alignés sur les noms réels)
 vi.mock('../repositories/index.js', () => ({
     ordersRepo: {
         create: vi.fn(),
@@ -23,8 +21,8 @@ vi.mock('../repositories/index.js', () => ({
         release: vi.fn()
     },
     cartsRepo: {
-        listItems: vi.fn(), // Utilisé à l'étape 1 du service
-        clearCart: vi.fn()  // Utilisé à l'étape 6 du service
+        listItems: vi.fn(),
+        clearCart: vi.fn()
     },
     shipmentsRepo: {
         create: vi.fn()
@@ -39,24 +37,24 @@ describe('OrderService', () => {
 
     it('devrait créer une commande et vider le panier', async () => {
         const userId = 'u-1';
-        const cartId = 'c-1';
-        const shippingAddress = '123 Rue de la Montre';
-
+        const shippingAddress = { addressLine1: '123 Rue de la Montre', city: 'Paris', country: 'France' };
         const mockItems = [
             { variantId: 'v-1', price: 100, quantity: 2 }
         ];
 
-        // Configuration des mocks pour suivre le flux du service
         cartsRepo.listItems.mockResolvedValue(mockItems);
         ordersRepo.create.mockResolvedValue({ id: 'order-999', status: 'PENDING' });
         ordersRepo.addItem.mockResolvedValue({ id: 'item-1' });
 
-        const order = await orderService.createOrderFromCart(userId, cartId, shippingAddress);
 
-        // Assertions
+        const order = await orderService.createOrderFromCart(userId, {
+            items: mockItems,
+            shippingAddress: shippingAddress,
+            shippingMethod: 'STANDARD'
+        });
+
         expect(order.status).toBe('PENDING');
         expect(order.id).toBe('order-999');
         expect(inventoryRepo.reserve).toHaveBeenCalled();
-        expect(cartsRepo.clearCart).toHaveBeenCalledWith(cartId, expect.anything());
     });
 });

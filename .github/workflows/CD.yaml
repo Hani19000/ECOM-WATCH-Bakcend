@@ -123,7 +123,6 @@ jobs:
 
       # Attend que le service Render soit opérationnel en interrogeant
       # l'endpoint /health toutes les 15 secondes pendant 5 minutes maximum.
-      #
       - name: Attente de la disponibilité de l'API
         run: |
           SERVICE_URL="https://ecom-watch.onrender.com"
