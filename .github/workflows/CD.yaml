@@ -114,7 +114,7 @@ jobs:
 
           # Render retourne 201 Created lorsque le déploiement est bien enregistré.
           # Tout autre code est considéré comme une erreur.
-          if [ "$HTTP_STATUS" != "201" ]; then
+          if [ "$HTTP_STATUS" != "200" ] && [ "$HTTP_STATUS" != "201" ] && [ "$HTTP_STATUS" != "202" ]; then
             echo "Erreur : Render n'a pas accepté le deploy hook (HTTP $HTTP_STATUS)"
             exit 1
           fi
