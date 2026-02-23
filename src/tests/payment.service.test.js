@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// 1. MOCK STRIPE - Tout est défini à l'intérieur pour éviter le ReferenceError
 vi.mock('stripe', () => {
     const mockSessionCreate = vi.fn();
     const mockConstructEvent = vi.fn();
@@ -12,16 +11,15 @@ vi.mock('stripe', () => {
         };
     });
 
-    // On attache les mocks à la classe pour y accéder plus tard via l'import
     StripeMock.instanceMocks = { mockSessionCreate, mockConstructEvent };
 
     return { default: StripeMock };
 });
 
-// 2. MOCK ENV
 vi.mock('../config/environment.js', () => ({
     ENV: {
         server: { nodeEnv: 'test' },
+        database: { redis: { host: 'localhost', port: 6379, password: '' } },
         stripe: { secretKey: 'sk_test', webhookSecret: 'wh_test' },
         PORT: 3000, POSTGRES_HOST: 'localhost', POSTGRES_PORT: 5432,
         POSTGRES_USER: 'test', POSTGRES_PASSWORD: 'test', POSTGRES_DB: 'test',
@@ -29,18 +27,15 @@ vi.mock('../config/environment.js', () => ({
     }
 }));
 
-// 3. MOCK REPO
 vi.mock('../repositories/index.js', () => ({
     ordersRepo: { findById: vi.fn(), updateStatus: vi.fn() }
 }));
 
-// IMPORTS
 import { paymentService } from '../services/payment.service.js';
 import { ordersRepo } from '../repositories/index.js';
 import Stripe from 'stripe';
 
 describe('PaymentService', () => {
-    // On récupère les mocks que nous avons attachés à la classe Stripe
     const { mockSessionCreate, mockConstructEvent } = Stripe.instanceMocks;
 
     beforeEach(() => {

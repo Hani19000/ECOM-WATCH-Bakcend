@@ -3,10 +3,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../repositories/index.js', () => ({
     inventoryRepo: {
         findByVariantId: vi.fn(),
-        upsert: vi.fn(), // <--- Aligné sur inventory.service.js
+        upsert: vi.fn(),
     },
     productsRepo: {
-        findVariantById: vi.fn()
+        findVariantById: vi.fn(),
+        findById: vi.fn()
     }
 }));
 

@@ -2,9 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../repositories/index.js', () => ({
     usersRepo: { findByEmail: vi.fn(), create: vi.fn(), findById: vi.fn(), count: vi.fn() },
-    rolesRepo: { findByName: vi.fn(), addUserRole: vi.fn(), listUserRoles: vi.fn() }
+    rolesRepo: { findByName: vi.fn(), addUserRole: vi.fn(), listUserRoles: vi.fn() },
+    ordersRepo: { autoClaimGuestOrders: vi.fn() }
 }));
-
 vi.mock('../services/password.service.js', () => ({
     passwordService: { generateSalt: vi.fn(), hashPassword: vi.fn(), comparePassword: vi.fn() }
 }));

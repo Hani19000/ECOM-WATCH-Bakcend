@@ -21,7 +21,7 @@ vi.mock('../config/database.js', () => ({
     }
 }));
 
-import { productsRepo, inventoryRepo } from '../repositories/index.js';
+import { productsRepo } from '../repositories/index.js';
 import { productService } from '../services/products.service.js';
 import { AppError } from '../utils/appError.js';
 
@@ -36,7 +36,7 @@ describe('ProductsService', () => {
         const result = await productService.getProductDetails('montre-luxe');
 
         expect(result.name).toBe('Montre Luxe');
-        expect(productsRepo.getFullDetails).toHaveBeenCalledWith('montre-luxe', undefined);
+        expect(productsRepo.getFullDetails).toHaveBeenCalledWith('montre-luxe', 'slug');
     });
 
     it('devrait lancer une erreur 404 si le produit n\'existe pas', async () => {

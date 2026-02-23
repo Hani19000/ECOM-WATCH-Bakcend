@@ -26,6 +26,9 @@ vi.mock('../repositories/index.js', () => ({
     },
     shipmentsRepo: {
         create: vi.fn()
+    },
+    productsRepo: {
+        findActivePromotionPrice: vi.fn().mockResolvedValue(null)
     }
 }));
 
@@ -45,7 +48,6 @@ describe('OrderService', () => {
         cartsRepo.listItems.mockResolvedValue(mockItems);
         ordersRepo.create.mockResolvedValue({ id: 'order-999', status: 'PENDING' });
         ordersRepo.addItem.mockResolvedValue({ id: 'item-1' });
-
 
         const order = await orderService.createOrderFromCart(userId, {
             items: mockItems,
