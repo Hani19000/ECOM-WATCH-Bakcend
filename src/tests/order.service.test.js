@@ -28,7 +28,8 @@ vi.mock('../repositories/index.js', () => ({
         create: vi.fn()
     },
     productsRepo: {
-        findActivePromotionPrice: vi.fn().mockResolvedValue(null)
+        findActivePromotionPrice: vi.fn().mockResolvedValue(null),
+        findVariantById: vi.fn().mockResolvedValue({ productId: 'p-1' })
     }
 }));
 

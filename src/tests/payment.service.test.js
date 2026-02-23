@@ -31,8 +31,22 @@ vi.mock('../config/environment.js', () => ({
     }
 }));
 
+vi.mock('../config/database.js', () => ({
+    pgPool: {
+        connect: vi.fn().mockResolvedValue({
+            query: vi.fn().mockResolvedValue({ rows: [] }),
+            release: vi.fn()
+        })
+    }
+}));
+
 vi.mock('../repositories/index.js', () => ({
-    ordersRepo: { findById: vi.fn(), updateStatus: vi.fn() }
+    ordersRepo: {
+        findById: vi.fn(),
+        updateStatus: vi.fn(),
+        listItems: vi.fn().mockResolvedValue([{ productName: 'Montre', price: 100, quantity: 1 }])
+    },
+    inventoryRepo: { confirmSale: vi.fn() }
 }));
 
 import { paymentService } from '../services/payment.service.js';
