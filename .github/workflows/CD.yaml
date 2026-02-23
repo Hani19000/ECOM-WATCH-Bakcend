@@ -63,7 +63,7 @@ jobs:
       - name: Installation du client psql
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq postgresql-client-15
+          sudo apt-get install -y -qq postgresql-client
 
       # Vérification de la connexion avant d'appliquer quoi que ce soit.
       # Détecte rapidement une erreur de secret ou une indisponibilité Neon.
