@@ -11,7 +11,7 @@ vi.mock('../config/database.js', () => ({
 
 vi.mock('../repositories/index.js', () => ({
     ordersRepo: {
-        create: vi.fn(),
+        createOrder: vi.fn(),
         addItem: vi.fn(),
         updateStatus: vi.fn(),
         listItems: vi.fn()
@@ -46,7 +46,7 @@ describe('OrderService', () => {
         ];
 
         cartsRepo.listItems.mockResolvedValue(mockItems);
-        ordersRepo.create.mockResolvedValue({ id: 'order-999', status: 'PENDING' });
+        ordersRepo.createOrder.mockResolvedValue({ id: 'order-999', status: 'PENDING' });
         ordersRepo.addItem.mockResolvedValue({ id: 'item-1' });
 
         const order = await orderService.createOrderFromCart(userId, {

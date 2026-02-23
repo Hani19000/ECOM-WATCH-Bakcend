@@ -19,11 +19,15 @@ vi.mock('stripe', () => {
 vi.mock('../config/environment.js', () => ({
     ENV: {
         server: { nodeEnv: 'test' },
-        database: { redis: { host: 'localhost', port: 6379, password: '' } },
+        database: {
+            postgres: { url: 'postgres://test:test@localhost:5432/test' },
+            redis: { host: 'localhost', port: 6379, password: '' }
+        },
         stripe: { secretKey: 'sk_test', webhookSecret: 'wh_test' },
-        PORT: 3000, POSTGRES_HOST: 'localhost', POSTGRES_PORT: 5432,
-        POSTGRES_USER: 'test', POSTGRES_PASSWORD: 'test', POSTGRES_DB: 'test',
-        JWT_ACCESS_SECRET: 'test', JWT_REFRESH_SECRET: 'test', SENTRY_DSN: 'http://test'
+        PORT: 3000,
+        JWT_ACCESS_SECRET: 'test',
+        JWT_REFRESH_SECRET: 'test',
+        SENTRY_DSN: 'http://test'
     }
 }));
 

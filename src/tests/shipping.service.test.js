@@ -24,13 +24,11 @@ describe('ShippingService', () => {
         vi.clearAllMocks();
     });
 
-    // ...
     describe('calculateShippingCost', () => {
         it('devrait calculer le tarif correct pour la France', () => {
-            const result = shippingService.calculateShippingCost('FR', 2);
+            const result = shippingService.calculateShippingCost('France', 2);
             expect(result.cost).toBe(6.90);
         });
-        // ...
 
         it('devrait utiliser le tarif INTERNATIONAL par défaut', () => {
             const result = shippingService.calculateShippingCost('MARS', 1);
