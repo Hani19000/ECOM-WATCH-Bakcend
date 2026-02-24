@@ -934,13 +934,7 @@ Pourquoi :
 
 6. **Observabilité**
 - Sentry + logs contextuels + endpoint health.
-
----
-
-## 7. Ce qui n’est volontairement pas documenté ici
-- Dossiers et fichiers de tests unitaires (`src/tests/*.test.js`), selon la directive.
-- Détails ligne-à-ligne d’implémentation : la documentation est orientée décisions d’architecture, contraintes métier et garanties système.
-
+  
 ---
 
 ### src/config/environment.js
