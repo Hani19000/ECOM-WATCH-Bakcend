@@ -1,0 +1,28 @@
+# ================================================================
+# CD — API Gateway
+# Déploiement sur Render via Deploy Hook sur merge main
+# ================================================================
+
+name: CD — Gateway
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "gateway/**"
+
+jobs:
+  deploy:
+    name: Deploy Gateway → Render
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trigger Render Deploy Hook
+        run: |
+          curl -s -o /dev/null -w "%{http_code}" \
+            -X POST "${{ secrets.RENDER_GATEWAY_DEPLOY_HOOK }}"
+        # Secrets à créer dans GitHub :
+        # RENDER_GATEWAY_DEPLOY_HOOK = URL du deploy hook Render du service Gateway
