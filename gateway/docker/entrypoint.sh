@@ -13,21 +13,23 @@ echo "   PORT        = ${PORT}"
 echo "   MONOLITH    = ${MONOLITH_URL}"
 echo "   FRONTEND    = ${FRONTEND_DOMAIN}"
 
+# Prépare les dossiers dans /tmp (pas de problème de permissions)
+mkdir -p /tmp/nginx/conf.d
+
 # Substitue les variables d'env dans les configs Nginx
 # On cible uniquement nos variables pour ne pas casser les variables
-# Nginx natives ($host, $uri, etc.)
-ENV_VARS='$PORT $MONOLITH_URL $FRONTEND_DOMAIN $cors_origin'
+# Nginx natives ($host, $uri, $remote_addr, etc.)
+ENV_VARS='$PORT $MONOLITH_URL $FRONTEND_DOMAIN'
 
-envsubst "$ENV_VARS" < /etc/nginx/nginx.conf     > /tmp/nginx.conf
-envsubst "$ENV_VARS" < /etc/nginx/conf.d/default.conf > /tmp/default.conf
+envsubst "$ENV_VARS" < /etc/nginx/nginx.conf          > /tmp/nginx/nginx.conf
+envsubst "$ENV_VARS" < /etc/nginx/conf.d/default.conf > /tmp/nginx/conf.d/default.conf
 
-# Copie les fichiers substitués à leur place finale
-cp /tmp/nginx.conf    /etc/nginx/nginx.conf
-cp /tmp/default.conf  /etc/nginx/conf.d/default.conf
+# proxy_params n'a pas de variables à substituer, on le copie tel quel
+cp /etc/nginx/conf.d/proxy_params.conf /tmp/nginx/conf.d/proxy_params.conf
 
 # Validation config avant de démarrer
 echo "✅ Validation config Nginx..."
-nginx -t -c /etc/nginx/nginx.conf
+nginx -t -c /tmp/nginx/nginx.conf
 
 echo "✅ Gateway prêt — écoute sur :${PORT}"
-exec nginx -g "daemon off;" -c /etc/nginx/nginx.conf
+exec nginx -g "daemon off;" -c /tmp/nginx/nginx.conf
