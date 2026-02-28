@@ -2,12 +2,16 @@
  * @module Service/User
  *
  * Gère la logique métier des utilisateurs : profil, rôles et changement de mot de passe.
+ *
+ * MICROSERVICE :
+ * - ordersRepo (import direct monolithe) remplacé par orderClient (appel HTTP)
+ * - getUserProfile dégrade gracieusement si order-service est indisponible (stats = null)
  */
 import { usersRepo, rolesRepo } from '../repositories/index.js';
 import { AppError, BusinessError } from '../utils/appError.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
 import { passwordService } from './password.service.js';
-import { ordersRepo } from '../../../../src/repositories/orders.repo.js';
+import { orderClient } from '../clients/order.client.js';
 import { cacheService } from './cache.service.js';
 
 class UserService {
@@ -20,6 +24,7 @@ class UserService {
     /**
      * Récupère le profil complet d'un utilisateur avec ses statistiques de commande.
      * Mis en cache 15 minutes pour garder les statistiques fraîches sans surcharger la DB.
+     * Si order-service est indisponible, le profil est retourné sans les stats (dégradation gracieuse).
      */
     async getUserProfile(userId) {
         const cacheKey = `user:profile:full:${userId}`;
@@ -31,7 +36,9 @@ class UserService {
         if (!user) throw new AppError('Utilisateur introuvable', HTTP_STATUS.NOT_FOUND);
 
         const roles = await rolesRepo.listUserRoles(userId);
-        const stats = await ordersRepo.getUserStats(userId);
+
+        // Appel HTTP vers order-service — null si indisponible, ne bloque pas le profil
+        const stats = await orderClient.getUserStats(userId);
 
         const fullProfile = {
             ...user,
@@ -64,7 +71,6 @@ class UserService {
     }
 
     async deleteUser(targetUserId, currentAdminId) {
-        // Un administrateur ne peut pas se supprimer lui-même.
         if (targetUserId === currentAdminId) {
             throw new AppError(
                 'Opération interdite : Vous ne pouvez pas supprimer votre propre compte.',
@@ -72,7 +78,6 @@ class UserService {
             );
         }
 
-        // Un administrateur ne peut pas supprimer un autre administrateur.
         const targetUserRoles = await rolesRepo.listUserRoles(targetUserId);
         const isTargetAdmin = targetUserRoles.some((r) => r.name.toUpperCase() === 'ADMIN');
         if (isTargetAdmin) {
@@ -89,19 +94,10 @@ class UserService {
         return true;
     }
 
-    /**
-     * Met à jour les accès d'un utilisateur (statut actif/bloqué et rôle).
-     * Protégé contre l'auto-modification et la modification d'un autre administrateur.
-     *
-     * @param {string} targetUserId   - UUID de l'utilisateur à modifier
-     * @param {{ role?: string, isActive?: boolean }} privileges - Changements à appliquer
-     * @param {string} currentAdminId - UUID de l'administrateur effectuant la modification
-     */
     async updatePrivileges(targetUserId, { role, isActive }, currentAdminId) {
         const user = await usersRepo.findById(targetUserId);
         if (!user) throw new AppError('Utilisateur introuvable', HTTP_STATUS.NOT_FOUND);
 
-        // Un administrateur ne peut pas modifier ses propres accès.
         if (targetUserId === currentAdminId) {
             throw new AppError(
                 'Opération interdite : Vous ne pouvez pas modifier vos propres accès.',
@@ -112,7 +108,6 @@ class UserService {
         const currentRoles = await rolesRepo.listUserRoles(targetUserId);
         const isAdmin = currentRoles.some((r) => r.name.toUpperCase() === 'ADMIN');
 
-        // Un administrateur ne peut pas rétrograder ou bloquer un autre administrateur.
         if (isAdmin) {
             throw new AppError(
                 "Opération interdite : Impossible de modifier les accès d'un autre Administrateur.",
@@ -144,10 +139,6 @@ class UserService {
         return this.getUserProfile(targetUserId);
     }
 
-    /**
-     * Les champs sensibles (hash, salt) sont supprimés de la réponse
-     * pour ne jamais les exposer dans les logs ou les réponses API.
-     */
     async getProfile(userId) {
         const user = await usersRepo.findById(userId);
         if (!user) throw new AppError('Utilisateur non trouvé', HTTP_STATUS.NOT_FOUND);
@@ -169,7 +160,6 @@ class UserService {
             throw new AppError('Ancien mot de passe incorrect', HTTP_STATUS.UNAUTHORIZED);
         }
 
-        // Vérification de l'historique pour interdire la réutilisation des anciens mots de passe.
         const history = await usersRepo.getPasswordHistory(userId, 2);
         const allEntriesToCheck = [
             { passwordHash: user.passwordHash, salt: user.salt },
