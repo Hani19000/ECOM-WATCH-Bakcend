@@ -7,7 +7,7 @@ import { usersRepo, rolesRepo } from '../repositories/index.js';
 import { AppError, BusinessError } from '../utils/appError.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
 import { passwordService } from './password.service.js';
-import { ordersRepo } from '../repositories/orders.repo.js';
+import { ordersRepo } from '../../../../src/repositories/orders.repo.js';
 import { cacheService } from './cache.service.js';
 
 class UserService {
