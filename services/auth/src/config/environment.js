@@ -15,8 +15,7 @@ const requiredEnv = [
     'PORT',
     'JWT_ACCESS_SECRET',
     'JWT_REFRESH_SECRET',
-    'REDIS_HOST',
-    'REDIS_PORT',
+    'REDIS_URL',
     'CLIENT_URL',
     'ORDER_SERVICE_URL',
     'INTERNAL_AUTH_SECRET',
@@ -70,9 +69,10 @@ export const ENV = Object.freeze({
             database: process.env.POSTGRES_DB,
         },
         redis: {
-            host: process.env.REDIS_HOST || 'localhost',
-            port: Number(process.env.REDIS_PORT) || 6379,
-            password: process.env.REDIS_PASSWORD || undefined,
+            // host: process.env.REDIS_HOST || 'localhost',
+            // port: Number(process.env.REDIS_PORT) || 6379,
+            // password: process.env.REDIS_PASSWORD || undefined,
+            url: process.env.REDIS_URL,
         },
     },
 
