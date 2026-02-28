@@ -24,8 +24,8 @@ const router = Router();
 
 router.use(generalLimiter);
 
-router.use('/auth', authRoutes);
-router.use('/users', userRoutes);
+// router.use('/auth', authRoutes);
+// router.use('/users', userRoutes);
 router.use('/products', productRoutes);
 router.use('/categories', categoryRoutes);
 router.use('/promotions', promotionRoutes);
