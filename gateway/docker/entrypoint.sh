@@ -8,7 +8,6 @@ echo "FRONTEND = ${FRONTEND_DOMAIN}"
 
 mkdir -p /tmp/nginx/conf.d
 
-# Substitue uniquement nos variables (laisse les variables Nginx intactes)
 envsubst '${PORT} ${MONOLITH_URL} ${FRONTEND_DOMAIN}' \
   < /etc/nginx/nginx.conf > /tmp/nginx/nginx.conf
 
