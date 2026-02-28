@@ -8,11 +8,8 @@
  * - Messages génériques sur échec (pas de révélation d'existence email)
  * - Transactions atomiques (user + rôle en une seule opération)
  * - Notifications fire-and-forget (ne bloquent pas le flux principal)
- * - Auto-claim des commandes guest après inscription
- *
- * MICROSERVICE :
- * - orderService (import direct) remplacé par orderClient (appel HTTP)
- *   La logique métier et le contrat de retour sont strictement identiques.
+ * - Auto-claim des commandes guest après inscription/connexion
+ *   pour une meilleure expérience utilisateur (pas de panier perdu)
  */
 import { usersRepo, rolesRepo } from '../repositories/index.js';
 import { passwordService } from './password.service.js';

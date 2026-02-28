@@ -19,7 +19,7 @@ const requiredEnv = [
     'REDIS_PORT',
     'CLIENT_URL',
     'ORDER_SERVICE_URL',
-    'INTERNAL_SECRET',
+    'INTERNAL_AUTH_SECRET',
 ];
 
 // SENTRY_DSN optionnel en dev, obligatoire en prod
@@ -103,7 +103,7 @@ export const ENV = Object.freeze({
     // Communication inter-services
     services: {
         orderServiceUrl: process.env.ORDER_SERVICE_URL, // utilisé par order.client.js
-        internalSecret: process.env.INTERNAL_SECRET,  // header X-Internal-Secret
+        internalSecret: process.env.INTERNAL_AUTH_SECRET,  // header X-Internal-Secret
     },
 
     cors: {
