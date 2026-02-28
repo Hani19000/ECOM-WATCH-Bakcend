@@ -4,8 +4,8 @@
  * Supprime les refresh tokens expirés pour limiter la croissance de la table.
  * Fréquence : tous les jours à 3h.
  */
-import { pgPool } from '../../config/database.js';
-import { logInfo, logError } from '../../utils/logger.js';
+import { pgPool } from '../config/database.js';
+import { logInfo, logError } from '../utils/logger.js';
 
 export const sessionsCleanupJob = {
     name: 'sessions-cleanup',
