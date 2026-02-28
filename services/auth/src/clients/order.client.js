@@ -177,6 +177,49 @@ async function getOrderHistory(userId, { page = 1, limit = 10, status } = {}) {
     }
 }
 
+/**
+ * Récupère les statistiques de commande d'un utilisateur.
+ * Appelé par users.service.js → getUserProfile()
+ *
+ * Ne lève jamais d'exception — retourne null si order-service indisponible.
+ * Le profil utilisateur est retourné normalement, sans stats.
+ *
+ * @param {string} userId
+ * @returns {Promise<object|null>}
+ */
+async function getUserStats(userId) {
+    if (!userId || typeof userId !== 'string') return null;
+
+    const endpoint = `${ORDER_SERVICE_URL}/internal/orders/user/${userId}/stats`;
+
+    try {
+        const response = await fetchWithTimeout(endpoint, {
+            method: 'GET',
+            headers: buildInternalHeaders(),
+        });
+
+        if (!response.ok) {
+            logError(new Error(`order-service responded with ${response.status}`), {
+                context: 'orderClient.getUserStats',
+                status: response.status,
+                userId,
+            });
+            return null;
+        }
+
+        return await response.json();
+
+    } catch (error) {
+        const isTimeout = error.name === 'AbortError';
+        logError(error, {
+            context: 'orderClient.getUserStats',
+            reason: isTimeout ? 'timeout' : 'network_error',
+            userId,
+        });
+        return null;
+    }
+}
+
 // ─── Export ───────────────────────────────────────────────────────────────────
 
-export const orderClient = { claimGuestOrders, getOrderHistory };
+export const orderClient = { claimGuestOrders, getOrderHistory, getUserStats };
