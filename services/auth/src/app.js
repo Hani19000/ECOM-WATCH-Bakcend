@@ -3,47 +3,47 @@
  *
  * Point d'entrée Express de l'auth-service.
  *
- * DIFFÉRENCES PAR RAPPORT AU MONOLITHE :
- * - Port 3002 (défini dans environment.js)
- * - Pas de fichiers statiques (images, assets → monolithe ou CDN)
- * - Pas de rawBody webhook (aucun paiement ici)
- * - Uniquement les routes /auth et /users
- * - Uniquement le cron sessions (nettoyage des tokens expirés)
- * - Health check allégé : PostgreSQL + Redis uniquement
+ * RESPONSABILITÉS DU MICROSERVICE :
+ * - Port dynamique (géré par Render via process.env.PORT)
+ * - Aucune gestion de fichiers statiques (images, assets)
+ * - Aucun parsing spécifique (rawBody pour webhooks)
+ * - Périmètre strict : routes /auth et /users
+ * - CRON : Uniquement le nettoyage des sessions/tokens
+ * - Health check : Validation des dépendances critiques (Postgres)
  */
 
 import * as Sentry from '@sentry/node';
 import express from 'express';
 import cookieParser from 'cookie-parser';
+import cron from 'node-cron';
 
+// Config & Utils
+import { ENV } from './config/environment.js';
+import { pgPool } from './config/database.js';
+import { healthCheck } from './utils/healthCheck.js';
+import { logInfo, logError } from './utils/logger.js';
+
+// Middlewares
 import { requestLogger } from './middlewares/logger.middleware.js';
 import { errorHandler } from './middlewares/erroHandler.middleware.js';
-import { notFound } from './config/security.js';
+import { helmetMiddleware, corsMiddleware, compressResponse } from './config/security.js';
+
+// Router & Jobs
 import v1Router from './routes/index.routes.js';
-import {
-    helmetMiddleware,
-    corsMiddleware,
-    compressResponse,
-} from './config/security.js';
-import { healthCheck } from './utils/healthCheck.js';
-import { pgPool } from './config/database.js';
-import { logInfo, logError } from './utils/logger.js';
-import { initializeAuthCronJobs, shutdownAuthCronJobs } from './jobs/index.js';
-import { ENV } from './config/environment.js';
+import { sessionsCleanupJob } from './jobs/sessions.cron.js';
 
 const app = express();
 
-// Indispensable derrière un reverse proxy (Render, Nginx) pour récupérer
-// la vraie IP client dans les rate limiters et les logs.
+// ─────────────────────────────────────────────────────────────────────
+// 1. CONFIGURATION RÉSEAU
+// Indispensable derrière un reverse proxy (Render, Nginx, API Gateway)
+// ─────────────────────────────────────────────────────────────────────
 app.set('trust proxy', 1);
 
 // ─────────────────────────────────────────────────────────────────────
-// HEALTH CHECK
-// Répondre sur /health sans passer par le router /api/v1 :
-// - Evite les middlewares (rate limit, auth) sur un endpoint de monitoring
-// - Permet à Render et UptimeRobot de vérifier le service rapidement
+// 2. HEALTH CHECK (Priorité Haute)
+// Placé avant tous les middlewares pour une réponse immédiate.
 // ─────────────────────────────────────────────────────────────────────
-
 app.get('/health', async (_req, res) => {
     try {
         const { postgres } = await healthCheck(pgPool);
@@ -53,9 +53,11 @@ app.get('/health', async (_req, res) => {
         res.status(isHealthy ? 200 : 503).json({
             status: isHealthy ? 'ok' : 'degraded',
             service: 'auth-service',
-            version: '1.0.0',
+            version: process.env.npm_package_version || '1.0.0',
             uptime: process.uptime(),
-            dependencies: { postgres: postgres.status },
+            dependencies: {
+                postgres: postgres.status
+            },
         });
     } catch (err) {
         logError(err, { context: 'health-check' });
@@ -64,62 +66,74 @@ app.get('/health', async (_req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────
-// BODY PARSING
-// Pas de rawBody ici : l'auth-service ne traite aucun webhook de paiement.
+// 3. SÉCURITÉ & LOGS (Avant le parsing)
+// Bloquer les requêtes non autorisées AVANT d'allouer de la mémoire
 // ─────────────────────────────────────────────────────────────────────
-
-app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
-
-// ─────────────────────────────────────────────────────────────────────
-// PIPELINE SÉCURITÉ ET LOGS
-// ─────────────────────────────────────────────────────────────────────
-
 app.use(helmetMiddleware);
 app.use(corsMiddleware);
-app.use(cookieParser());
-app.use(compressResponse);
 app.use(requestLogger);
 
 // ─────────────────────────────────────────────────────────────────────
-// ROUTES API
-// Seules /auth et /users sont exposées dans ce service.
-// Le rate limiter général est appliqué dans index.routes.js.
+// 4. PARSING BODY & COOKIES
+// L'auth-service ne reçoit que des identifiants (email, password, tokens).
+// Fixer une limite (ex: 10kb) protège contre les attaques DoS.
 // ─────────────────────────────────────────────────────────────────────
+app.use(express.json({ limit: '10kb' }));
+app.use(express.urlencoded({ extended: false, limit: '10kb' }));
+app.use(cookieParser());
+app.use(compressResponse);
 
+// ─────────────────────────────────────────────────────────────────────
+// 5. ROUTES API
+// ─────────────────────────────────────────────────────────────────────
 app.use('/api/v1', v1Router);
 
 // ─────────────────────────────────────────────────────────────────────
-// GESTION DES ROUTES INCONNUES
-// Doit être déclaré après toutes les routes pour capturer le reste.
+// 6. GESTION DU 404 (Routes inconnues)
 // ─────────────────────────────────────────────────────────────────────
-
-app.use(notFound);
+app.use((req, res) => {
+    res.status(404).json({
+        success: false,
+        message: `Endpoint introuvable sur le service auth : ${req.originalUrl}`
+    });
+});
 
 // ─────────────────────────────────────────────────────────────────────
-// GESTION DES ERREURS
-// Sentry doit intercepter avant le handler applicatif pour capturer
-// la stack trace complète en production.
+// 7. GESTION DES ERREURS GLOBALES
 // ─────────────────────────────────────────────────────────────────────
-
-if (ENV.sentry.dsn) {
+if (ENV.sentry && ENV.sentry.dsn) {
     Sentry.setupExpressErrorHandler(app);
 }
 
 app.use(errorHandler);
 
 // ─────────────────────────────────────────────────────────────────────
-// CRON JOBS
-// Seul le job de nettoyage des sessions est nécessaire ici.
-// Les autres crons (inventaire, commandes, stats) restent dans le monolithe.
+// 8. GESTION DES CRONS & GRACEFUL SHUTDOWN
 // ─────────────────────────────────────────────────────────────────────
 
-initializeAuthCronJobs();
+// Initialisation du cron exclusif à l'auth-service
+logInfo(`[CRON] Planification du job : ${sessionsCleanupJob.name} (${sessionsCleanupJob.schedule})`);
+const sessionCronTask = cron.schedule(
+    sessionsCleanupJob.schedule,
+    sessionsCleanupJob.execute,
+    { scheduled: true }
+);
 
-// Arrêt propre : on laisse les crons se terminer avant d'éteindre le process
-const shutdown = (signal) => {
-    logInfo(`[auth-service] ${signal} reçu — arrêt des crons...`);
-    shutdownAuthCronJobs();
+const shutdown = async (signal) => {
+    logInfo(`[auth-service] ${signal} reçu — arrêt des processus...`);
+
+    // Arrêt propre du cron
+    sessionCronTask.stop();
+    logInfo(`[CRON] Job ${sessionsCleanupJob.name} arrêté.`);
+
+    // Fermeture propre du pool de base de données (bonne pratique microservice)
+    try {
+        await pgPool.end();
+        logInfo('[DB] Connexion PostgreSQL fermée avec succès.');
+    } catch (err) {
+        logError(err, { context: 'shutdown-db-close' });
+    }
+
     process.exit(0);
 };
 
