@@ -3,20 +3,24 @@
  *
  * Encapsule l'accès à Redis avec sérialisation/désérialisation JSON automatique.
  * Singleton pour garantir une seule connexion Redis partagée dans l'application.
+ *
+ * Supporte REDIS_URL (URL complète) ou REDIS_HOST/REDIS_PORT séparés.
+ * REDIS_URL est prioritaire — recommandé pour Render (évite les problèmes DNS inter-régions).
  */
 import { createClient } from 'redis';
 import { ENV } from '../config/environment.js';
 import { logInfo, logError } from '../utils/logger.js';
 
+const redisUrl = process.env.REDIS_URL
+    || `redis://${ENV.database.redis.host}:${ENV.database.redis.port}`;
+
 class CacheService {
     constructor() {
         if (CacheService.instance) return CacheService.instance;
 
-        const { host, port, password } = ENV.database.redis;
-
         this.client = createClient({
-            url: `redis://${host}:${port}`,
-            password,
+            url: redisUrl,
+            password: ENV.database.redis.password,
         });
 
         this.client.on('error', (err) => logError(err, { context: 'Redis Client Error' }));
@@ -46,10 +50,6 @@ class CacheService {
         await this.client.del(key);
     }
 
-    /**
-     * Supprime plusieurs clés en une seule opération.
-     * Utilisé pour invalider le cache d'un produit et toutes ses entrées de catalogue liées.
-     */
     async deleteMany(keys) {
         if (!keys || keys.length === 0) return;
         await Promise.all(keys.map((key) => this.delete(key)));
