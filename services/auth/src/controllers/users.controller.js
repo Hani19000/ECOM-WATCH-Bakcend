@@ -4,7 +4,7 @@
  * Interface pour la gestion des profils utilisateurs et l'administration des comptes.
  */
 import { userService } from '../services/users.service.js';
-import { orderService } from '../services/orders.service.js';
+import { orderService } from '../../../../src/services/orders.service.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
 
