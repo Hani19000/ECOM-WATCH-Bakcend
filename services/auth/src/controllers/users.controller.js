@@ -2,9 +2,13 @@
  * @module Controller/Users
  *
  * Interface pour la gestion des profils utilisateurs et l'administration des comptes.
+ *
+ * MICROSERVICE :
+ * - orderService (import direct monolithe) remplacé par orderClient (appel HTTP)
+ * - Dégradation gracieuse : si order-service est indisponible, retourne [] sans crasher
  */
 import { userService } from '../services/users.service.js';
-import { orderService } from '../../../../src/services/orders.service.js';
+import { orderClient } from '../clients/order.client.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
 
@@ -52,11 +56,12 @@ class UserController {
     /**
      * GET /api/v1/users/me/orders
      * Historique paginé des commandes de l'utilisateur connecté.
+     * Appel HTTP vers order-service — retourne [] si indisponible.
      */
     getMyOrders = asyncHandler(async (req, res) => {
         const { page, limit, status } = req.query;
 
-        const result = await orderService.getOrderHistory(req.user.id, {
+        const result = await orderClient.getOrderHistory(req.user.id, {
             page: parseInt(page, 10) || 1,
             limit: parseInt(limit, 10) || 10,
             status,
