@@ -4,24 +4,24 @@
  * Encapsule l'accès à Redis avec sérialisation/désérialisation JSON automatique.
  * Singleton pour garantir une seule connexion Redis partagée dans l'application.
  *
- * Supporte REDIS_URL (URL complète) ou REDIS_HOST/REDIS_PORT séparés.
- * REDIS_URL est prioritaire — recommandé pour Render (évite les problèmes DNS inter-régions).
+ * Supporte REDIS_URL complète (Upstash, Redis Cloud, Render).
+ * rediss:// → TLS activé (Upstash)
+ * redis://  → sans TLS (local, Render interne)
  */
 import { createClient } from 'redis';
-import { ENV } from '../config/environment.js';
 import { logInfo, logError } from '../utils/logger.js';
 
-const redisUrl = process.env.REDIS_URL
-    || `redis://${ENV.database.redis.host}:${ENV.database.redis.port}`;
+const redisUrl = process.env.REDIS_URL;
+
+if (!redisUrl) {
+    throw new Error('[auth-service] REDIS_URL manquante');
+}
 
 class CacheService {
     constructor() {
         if (CacheService.instance) return CacheService.instance;
 
-        this.client = createClient({
-            url: redisUrl,
-            password: ENV.database.redis.password,
-        });
+        this.client = createClient({ url: redisUrl });
 
         this.client.on('error', (err) => logError(err, { context: 'Redis Client Error' }));
         this.client.on('connect', () => logInfo('Redis connecté avec succès'));
