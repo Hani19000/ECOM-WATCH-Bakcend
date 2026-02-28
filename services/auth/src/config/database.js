@@ -37,7 +37,7 @@ const finalConfig = {
 export const pgPool = new Pool(finalConfig);
 
 pgPool.on('connect', (client) => {
-    client.query('SET search_path TO public, auth, product, "order"')
+    client.query('SET search_path TO auth, public')
         .catch((err) => logError(err, { context: 'pgPool search_path init' }));
 });
 
