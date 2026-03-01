@@ -15,7 +15,7 @@ import { restrictTo } from '../middleware/role.middleware.js';
 import { validateUUID, validateRequired } from '../utils/validation.js';
 import { ValidationError } from '../utils/appError.js';
 import { uploadCloud } from '../config/cloudinary.js';
-import { handleUpload } from '../middlewares/multer.middleware.js';
+import { handleUpload } from '../middleware/upload.middleware.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { productService } from '../services/products.service.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
