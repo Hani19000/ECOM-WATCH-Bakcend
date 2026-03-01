@@ -95,7 +95,7 @@ vi.mock('../clients/order.client.js', () => ({
 }));
 
 import { paymentService } from '../services/payment.service.js';
-import { orderClient } from '../../services/order/src/clients/order.client.js';
+import { orderClient } from '../clients/order.client.js';
 import Stripe from 'stripe';
 
 describe('PaymentService', () => {
