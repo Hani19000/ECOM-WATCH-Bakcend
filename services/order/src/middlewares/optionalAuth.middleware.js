@@ -1,15 +1,11 @@
 /**
  * @module Middleware/OptionalAuth
  *
- * Middleware d'authentification optionnelle.
+ * Middleware d'authentification optionnelle (Version Microservice).
  * Contrairement à `protect`, ne bloque pas la requête si l'utilisateur n'est pas authentifié.
- * Utilisé pour les flux guest : checkout, pages publiques avec contenu personnalisé.
- *
- * Token valide  → req.user est hydraté avec les données utilisateur et ses rôles.
- * Token absent ou invalide → req.user reste undefined, la requête continue normalement.
+ * Hydrate req.user DIRECTEMENT depuis le token JWT sans interroger la DB.
  */
 import { tokenService } from '../services/token.service.js';
-import { usersRepo, rolesRepo } from '../repositories/index.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 
 export const optionalAuth = asyncHandler(async (req, _res, next) => {
@@ -31,23 +27,17 @@ export const optionalAuth = asyncHandler(async (req, _res, next) => {
             return next();
         }
 
-        const user = await usersRepo.findById(decoded.id || decoded.sub);
-
-        if (!user) {
-            req.user = undefined;
-            return next();
-        }
-
-        const roles = await rolesRepo.listUserRoles(user.id);
-
+        // Hydratation de req.user avec les données cryptées dans le JWT
+        // Plus aucune requête vers usersRepo ou rolesRepo n'est nécessaire !
         req.user = {
-            ...user,
-            roles: roles.map((role) => role.name),
+            id: decoded.sub || decoded.id,
+            email: decoded.email,
+            roles: decoded.roles || [],
         };
 
         next();
     } catch {
-        // Token malformé ou erreur DB — on continue sans authentification
+        // Token malformé, expiré ou erreur de signature — on continue en guest
         req.user = undefined;
         next();
     }
