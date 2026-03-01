@@ -18,7 +18,6 @@ import {
 } from './config/security.js';
 import { pgPool } from './config/database.js';
 import { cacheService } from './services/cache.service.js';
-import { logInfo } from './utils/logger.js';
 import rootRouter from './routes/index.routes.js';
 
 const app = express();

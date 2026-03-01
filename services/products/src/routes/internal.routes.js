@@ -18,7 +18,7 @@
  * └─────────────────────────────────────────────────────────────────┘
  */
 import { Router } from 'express';
-import { productsRepo, inventoryRepo } from '../repositories/index.js';
+import { productsRepo, inventoryRepo } from '../../repositories/index.js';
 import { inventoryService } from '../services/inventory.service.js';
 import { fromInternalService } from '../middleware/internal.middleware.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
