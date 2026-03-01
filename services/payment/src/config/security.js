@@ -14,7 +14,7 @@
 import helmet from 'helmet';
 import cors from 'cors';
 import compression from 'compression';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { ENV } from './environment.js';
 import { logInfo } from '../utils/logger.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
@@ -25,16 +25,19 @@ import { NotFoundError } from '../utils/appError.js';
 // ================================================================
 
 /**
- * Extrait l'IP réelle du client.
- * Indispensable pour les plateformes PaaS (Render, Heroku) derrière un Load Balancer.
+ * Génère une clé de rate limiting à partir de l'IP réelle du client.
+ *
+ * Pourquoi ipKeyGenerator plutôt qu'un accès direct à req.ip :
+ *   express-rate-limit v7+ exige l'usage de ce helper pour normaliser les
+ *   adresses IPv6 (ex: ::ffff:1.2.3.4 → 1.2.3.4). Sans lui, un client IPv6
+ *   pourrait contourner les limites avec plusieurs représentations de la même IP.
+ *
+ * Prérequis : `app.set('trust proxy', 1)` doit être activé dans app.js.
+ *   Avec ce flag, Express extrait automatiquement l'IP réelle depuis
+ *   X-Forwarded-For (positionné par Render/Nginx), ce qui rend inutile
+ *   toute extraction manuelle du header ici.
  */
-const getClientIp = (req) => {
-    const forwardedFor = req.headers['x-forwarded-for'];
-    if (forwardedFor) {
-        return forwardedFor.split(',')[0].trim();
-    }
-    return req.ip || 'unknown';
-};
+const getClientIp = (req) => ipKeyGenerator(req);
 
 const getAllowedOrigins = () => {
     if (ENV.server.nodeEnv === 'production') {
@@ -121,7 +124,6 @@ export const compressResponse = compression({
 export const generalLimiter = rateLimit({
     windowMs: ENV.rateLimit.windowMs,
     max: ENV.rateLimit.max,
-    validate: { ip: false },
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: getClientIp,
@@ -135,7 +137,6 @@ export const generalLimiter = rateLimit({
 export const checkoutLimiter = rateLimit({
     windowMs: ENV.rateLimit.checkoutWindowMs,
     max: ENV.rateLimit.checkoutMax,
-    validate: { ip: false },
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req) => `checkout:${getClientIp(req)}`,
@@ -156,7 +157,6 @@ export const checkoutLimiter = rateLimit({
 export const statusLimiter = rateLimit({
     windowMs: 60 * 1000, // 1 minute
     max: 30,
-    validate: { ip: false },
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req) => `payment-status:${getClientIp(req)}`,
