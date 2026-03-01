@@ -45,7 +45,7 @@ router.use('/products', productRoutes);
 router.use('/categories', categoryRoutes);
 router.use('/promotions', promotionRoutes);
 router.use('/cart', cartRoutes);
-router.use('/orders', orderRoutes);
+// router.use('/orders', orderRoutes);
 router.use('/shipping', shippingRoutes);
 router.use('/payments', paymentRoutes);
 router.use('/inventory', inventoryRoutes);
