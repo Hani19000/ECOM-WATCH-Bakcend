@@ -10,7 +10,9 @@
 import { ENV } from '../config/environment.js';
 import { logError } from '../utils/logger.js';
 
-const BASE_URL = `${ENV.services.monolithUrl}/internal/inventory`;
+// Le monolith monte ses routes sous /api/v1 (app.use('/api/v1', v1Router)).
+// Les routes /internal font partie de ce router — le préfixe /api/v1 est obligatoire.
+const BASE_URL = `${ENV.services.monolithUrl}/api/v1/internal/inventory`;
 const TIMEOUT_MS = ENV.services.httpTimeoutMs;
 
 // ── Utilitaires ───────────────────────────────────────────────────────────────

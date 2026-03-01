@@ -11,7 +11,8 @@
 import { ENV } from '../config/environment.js';
 import { logError } from '../utils/logger.js';
 
-const BASE_URL = `${ENV.services.monolithUrl}/internal/products`;
+// Même raison que inventory.client.js : le monolith monte tout sous /api/v1.
+const BASE_URL = `${ENV.services.monolithUrl}/api/v1/internal/products`;
 const TIMEOUT_MS = ENV.services.httpTimeoutMs;
 
 // ── Utilitaires ───────────────────────────────────────────────────────────────
