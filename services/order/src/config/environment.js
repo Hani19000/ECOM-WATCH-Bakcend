@@ -16,7 +16,9 @@ const requiredEnv = [
     'JWT_ACCESS_SECRET',          // Valider les tokens émis par l'auth-service
     'REDIS_URL',
     'CLIENT_URL',
-    'MONOLITH_URL',               // Appels HTTP vers /internal/inventory et /internal/products
+    'MONOLITH_URL',               // Appels HTTP vers le monolith (paiement)
+    'PRODUCT_SERVICE_URL',        // Appels HTTP vers /internal/inventory et /internal/variants
+    'INTERNAL_PRODUCT_SECRET',    // Secret partagé avec le product-service (stock + variants)
     'INTERNAL_ORDER_SECRET',      // Secret partagé avec le monolith (payment webhook)
     'INTERNAL_AUTH_SECRET',       // Secret partagé avec l'auth-service (autoClaimGuestOrders)
 ];
@@ -94,6 +96,7 @@ export const ENV = Object.freeze({
     // Communication inter-services
     services: {
         monolithUrl: process.env.MONOLITH_URL,
+        productServiceUrl: process.env.PRODUCT_SERVICE_URL,
         // Timeout en ms pour les appels HTTP vers le monolith.
         // En dessous, on préfère échouer vite et déclencher la saga compensatoire.
         httpTimeoutMs: Number(process.env.INTERNAL_HTTP_TIMEOUT_MS) || 5000,
@@ -105,6 +108,8 @@ export const ENV = Object.freeze({
         orderSecret: process.env.INTERNAL_ORDER_SECRET,
         // Utilisé pour les appels entrants depuis l'auth-service
         authSecret: process.env.INTERNAL_AUTH_SECRET,
+        // Utilisé pour les appels vers le product-service (inventory + variants)
+        productSecret: process.env.INTERNAL_PRODUCT_SECRET,
     },
 
     cors: {

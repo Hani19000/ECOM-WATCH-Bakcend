@@ -144,27 +144,54 @@ class PaymentController {
 
     /**
      * Page d'annulation après abandon de paiement (retour Stripe).
+     *
+     * Stripe redirige ici via cancel_url (configurée dans payment.service.js).
+     * Cette page affiche un message de confirmation puis redirige automatiquement
+     * vers le panier du frontend via <meta http-equiv="refresh">.
+     *
+     * Même stratégie que handleSuccess :
+     *   - Pas de script inline (bloqué par CSP script-src 'self')
+     *   - orderId transmis en query param pour permettre au frontend de retrouver
+     *     la commande concernée et de la remettre au statut exploitable.
+     *
+     * orderId est validé (UUID regex) avant injection dans l'URL de redirection
+     * pour prévenir toute injection dans le meta refresh.
      */
-    handleCancel = asyncHandler(async (_req, res) => {
+    handleCancel = asyncHandler(async (req, res) => {
+        const { orderId } = req.query;
+
+        // Validation stricte de l'orderId avant injection dans le HTML.
+        // Un orderId invalide est silencieusement ignoré — l'utilisateur
+        // est redirigé vers le panier sans paramètre superflu.
+        const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        const safeOrderId = orderId && UUID_REGEX.test(orderId) ? orderId : null;
+
+        const cancelUrl = safeOrderId
+            ? `${CLIENT_URL}/checkout/cancel?orderId=${safeOrderId}`
+            : `${CLIENT_URL}/cart`;
+
         res.send(`
             <!DOCTYPE html>
             <html lang="fr">
             <head>
                 <meta charset="UTF-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <meta http-equiv="refresh" content="2; url=${cancelUrl}">
                 <title>Paiement annulé - ECOM WATCH</title>
                 <style>
                     body { font-family: sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; background: #fdfbf7; }
                     .container { background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); text-align: center; }
                     h1 { color: #e74c3c; margin-bottom: 1rem; }
-                    a { color: #000; text-decoration: underline; }
+                    p { color: #666; margin-bottom: 2rem; }
+                    .loader { border: 3px solid #f3f3f3; border-top: 3px solid #e74c3c; border-radius: 50%; width: 20px; height: 20px; animation: spin 1s linear infinite; margin: 0 auto; }
+                    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
                 </style>
             </head>
             <body>
                 <div class="container">
                     <h1>Paiement annulé</h1>
-                    <p>Aucun débit n'a été effectué.</p>
-                    <a href="${CLIENT_URL}/checkout">Retourner au panier</a>
+                    <p>Aucun débit n'a été effectué. Redirection vers votre panier...</p>
+                    <div class="loader"></div>
                 </div>
             </body>
             </html>
