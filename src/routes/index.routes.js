@@ -31,27 +31,32 @@ const router = Router();
 
 // ─────────────────────────────────────────────────────────────────────
 // ROUTES PUBLIQUES ET AUTHENTIFIÉES
+//
+// Ce router est monté sous /api/v1 dans app.js (app.use('/api/v1', router)).
+// Les chemins ici sont RELATIFS à ce préfixe — ne pas le répéter.
+// Ex : router.use('/products') → accessible à /api/v1/products
 // ─────────────────────────────────────────────────────────────────────
 
 router.use(generalLimiter);
 
-router.use('/api/v1/auth', authRoutes);
-router.use('/api/v1/users', userRoutes);
-router.use('/api/v1/products', productRoutes);
-router.use('/api/v1/categories', categoryRoutes);
-router.use('/api/v1/promotions', promotionRoutes);
-router.use('/api/v1/cart', cartRoutes);
-router.use('/api/v1/orders', orderRoutes);
-router.use('/api/v1/shipping', shippingRoutes);
-router.use('/api/v1/payments', paymentRoutes);
-router.use('/api/v1/inventory', inventoryRoutes);
-router.use('/api/v1/taxes', taxRoutes);
-router.use('/api/v1/admin', adminRoutes);
-router.use('/api/v1', sitemapRoutes);
+router.use('/auth', authRoutes);
+router.use('/users', userRoutes);
+router.use('/products', productRoutes);
+router.use('/categories', categoryRoutes);
+router.use('/promotions', promotionRoutes);
+router.use('/cart', cartRoutes);
+// router.use('/orders', orderRoutes);
+router.use('/shipping', shippingRoutes);
+router.use('/payments', paymentRoutes);
+router.use('/inventory', inventoryRoutes);
+router.use('/taxes', taxRoutes);
+router.use('/admin', adminRoutes);
+router.use('/', sitemapRoutes);
 
 // ─────────────────────────────────────────────────────────────────────
-// ROUTES INTER-SERVICES (pas de rate limiter, protégées par secret)
+// ROUTES INTER-SERVICES (sans rate limiter, protégées par X-Internal-Secret)
 // Appelées uniquement par l'order-service — jamais exposées via Gateway.
+// Accessible à /api/v1/internal/... depuis les autres services.
 // ─────────────────────────────────────────────────────────────────────
 
 router.use('/internal', internalRoutes);
