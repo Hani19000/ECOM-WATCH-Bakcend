@@ -18,7 +18,7 @@ import productRoutes from './products.routes.js';
 import categoryRoutes from './categories.routes.js';
 import promotionRoutes from './promotions.routes.js';
 import cartRoutes from './cart.routes.js';
-import orderRoutes from './order.routes.js';
+// import orderRoutes from './order.routes.js';
 import shippingRoutes from './shipping.routes.js';
 import paymentRoutes from './payment.routes.js';
 import inventoryRoutes from './inventory.routes.js';
