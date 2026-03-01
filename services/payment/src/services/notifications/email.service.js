@@ -10,7 +10,7 @@
 import { Resend } from 'resend';
 import { ENV } from '../../config/environment.js';
 import { logInfo, logError } from '../../utils/logger.js';
-import { emailTemplates } from './templates/email/index.js';
+import { emailTemplates } from '../templates/email/index.js';
 
 class EmailService {
     constructor() {
