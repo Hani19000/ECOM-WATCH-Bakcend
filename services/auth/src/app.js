@@ -1,117 +1,143 @@
+/**
+ * @module App
+ *
+ * Point d'entrée Express de l'auth-service.
+ *
+ * RESPONSABILITÉS DU MICROSERVICE :
+ * - Port dynamique (géré par Render via process.env.PORT)
+ * - Aucune gestion de fichiers statiques (images, assets)
+ * - Aucun parsing spécifique (rawBody pour webhooks)
+ * - Périmètre strict : routes /auth et /users
+ * - CRON : Uniquement le nettoyage des sessions/tokens
+ * - Health check : Validation des dépendances critiques (Postgres)
+ */
+
 import * as Sentry from '@sentry/node';
 import express from 'express';
 import cookieParser from 'cookie-parser';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import cron from 'node-cron';
 
+// Config & Utils
+import { ENV } from './config/environment.js';
+import { pgPool } from './config/database.js';
+import { healthCheck } from './utils/healthCheck.js';
+import { logInfo, logError } from './utils/logger.js';
+
+// Middlewares
 import { requestLogger } from './middlewares/logger.middleware.js';
 import { errorHandler } from './middlewares/erroHandler.middleware.js';
+import { helmetMiddleware, corsMiddleware, compressResponse } from './config/security.js';
+
+// Router & Jobs
 import v1Router from './routes/index.routes.js';
-import internalRoutes from './routes/internal.routes.js';
-import {
-    helmetMiddleware,
-    corsMiddleware,
-    compressResponse,
-} from './config/security.js';
-import { healthService } from './services/health.service.js';
-import { logInfo } from './utils/logger.js';
-import { initializeCronJobs, shutdownCronJobs } from './jobs/index.js';
+import { sessionsCleanupJob } from './jobs/sessions.cron.js';
 
 const app = express();
+
+// ─────────────────────────────────────────────────────────────────────
+// 1. CONFIGURATION RÉSEAU
+// Indispensable derrière un reverse proxy (Render, Nginx, API Gateway)
+// ─────────────────────────────────────────────────────────────────────
 app.set('trust proxy', 1);
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
 // ─────────────────────────────────────────────────────────────────────
-// HEALTH CHECK
+// 2. HEALTH CHECK (Priorité Haute)
+// Placé avant tous les middlewares pour une réponse immédiate.
 // ─────────────────────────────────────────────────────────────────────
-
 app.get('/health', async (_req, res) => {
-    const { isHealthy, status } = await healthService.check();
-    res.status(isHealthy ? 200 : 503).json(status);
+    try {
+        const { postgres } = await healthCheck(pgPool);
+
+        const isHealthy = postgres.status === 'up';
+
+        res.status(isHealthy ? 200 : 503).json({
+            status: isHealthy ? 'ok' : 'degraded',
+            service: 'auth-service',
+            version: process.env.npm_package_version || '1.0.0',
+            uptime: process.uptime(),
+            dependencies: {
+                postgres: postgres.status
+            },
+        });
+    } catch (err) {
+        logError(err, { context: 'health-check' });
+        res.status(503).json({ status: 'error', service: 'auth-service' });
+    }
 });
 
 // ─────────────────────────────────────────────────────────────────────
-// BODY PARSING
-// rawBody est conservé sur les requêtes webhook pour permettre la
-// vérification de signature HMAC Stripe côté contrôleur.
+// 3. SÉCURITÉ & LOGS (Avant le parsing)
+// Bloquer les requêtes non autorisées AVANT d'allouer de la mémoire
 // ─────────────────────────────────────────────────────────────────────
-
-app.use(express.json({
-    verify: (req, _res, buf) => {
-        if (req.originalUrl?.includes('/webhook')) {
-            req.rawBody = buf;
-        }
-    },
-}));
-
-// ─────────────────────────────────────────────────────────────────────
-// PIPELINE SÉCURITÉ ET LOGS
-// ─────────────────────────────────────────────────────────────────────
-
 app.use(helmetMiddleware);
 app.use(corsMiddleware);
-app.use(cookieParser());
-app.use(compressResponse);
 app.use(requestLogger);
 
 // ─────────────────────────────────────────────────────────────────────
-// FICHIERS STATIQUES
+// 4. PARSING BODY & COOKIES
+// L'auth-service ne reçoit que des identifiants (email, password, tokens).
+// Fixer une limite (ex: 10kb) protège contre les attaques DoS.
 // ─────────────────────────────────────────────────────────────────────
-
-app.use('/images', express.static(path.join(__dirname, 'public/images'), {
-    setHeaders: (res) => {
-        res.set('Cross-Origin-Resource-Policy', 'cross-origin');
-    },
-}));
-
-// ─────────────────────────────────────────────────────────────────────
-// ROUTES INTER-SERVICES — /internal/*
-//
-// Montées à la RACINE de l'app (pas sous /api/v1) pour que l'order-service
-// puisse appeler ${MONOLITH_URL}/internal/inventory/reserve directement.
-//
-// Ces routes ne passent JAMAIS par le Gateway (bloquées par nginx :
-//   location ~ ^/internal/ { return 404; }
-// Elles ne sont accessibles qu'en réseau interne Render (service-to-service).
-// ─────────────────────────────────────────────────────────────────────
-
-app.use('/internal', internalRoutes);
+app.use(express.json({ limit: '10kb' }));
+app.use(express.urlencoded({ extended: false, limit: '10kb' }));
+app.use(cookieParser());
+app.use(compressResponse);
 
 // ─────────────────────────────────────────────────────────────────────
-// ROUTES API PUBLIQUES ET AUTHENTIFIÉES
-// Le rate limiter général est appliqué dans index.routes.js —
-// l'appliquer ici en plus provoquerait un double comptage sur /api/v1.
+// 5. ROUTES API
 // ─────────────────────────────────────────────────────────────────────
-
 app.use('/api/v1', v1Router);
 
 // ─────────────────────────────────────────────────────────────────────
-// GESTION DES ERREURS
-// Sentry doit être enregistré avant le handler d'erreur applicatif.
+// 6. GESTION DU 404 (Routes inconnues)
 // ─────────────────────────────────────────────────────────────────────
+app.use((req, res) => {
+    res.status(404).json({
+        success: false,
+        message: `Endpoint introuvable sur le service auth : ${req.originalUrl}`
+    });
+});
 
-Sentry.setupExpressErrorHandler(app);
+// ─────────────────────────────────────────────────────────────────────
+// 7. GESTION DES ERREURS GLOBALES
+// ─────────────────────────────────────────────────────────────────────
+if (ENV.sentry && ENV.sentry.dsn) {
+    Sentry.setupExpressErrorHandler(app);
+}
+
 app.use(errorHandler);
 
 // ─────────────────────────────────────────────────────────────────────
-// CRON JOBS
+// 8. GESTION DES CRONS & GRACEFUL SHUTDOWN
 // ─────────────────────────────────────────────────────────────────────
 
-initializeCronJobs();
+// Initialisation du cron exclusif à l'auth-service
+logInfo(`[CRON] Planification du job : ${sessionsCleanupJob.name} (${sessionsCleanupJob.schedule})`);
+const sessionCronTask = cron.schedule(
+    sessionsCleanupJob.schedule,
+    sessionsCleanupJob.execute,
+    { scheduled: true }
+);
 
-// Arrêt propre des crons avant extinction du processus
-process.on('SIGTERM', () => {
-    logInfo('SIGTERM reçu, arrêt des crons...');
-    shutdownCronJobs();
-    process.exit(0);
-});
+const shutdown = async (signal) => {
+    logInfo(`[auth-service] ${signal} reçu — arrêt des processus...`);
 
-process.on('SIGINT', () => {
-    logInfo('SIGINT reçu, arrêt des crons...');
-    shutdownCronJobs();
+    // Arrêt propre du cron
+    sessionCronTask.stop();
+    logInfo(`[CRON] Job ${sessionsCleanupJob.name} arrêté.`);
+
+    // Fermeture propre du pool de base de données (bonne pratique microservice)
+    try {
+        await pgPool.end();
+        logInfo('[DB] Connexion PostgreSQL fermée avec succès.');
+    } catch (err) {
+        logError(err, { context: 'shutdown-db-close' });
+    }
+
     process.exit(0);
-});
+};
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 export default app;
