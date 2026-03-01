@@ -44,8 +44,6 @@ export const ENV = Object.freeze({
         accessSecret: process.env.JWT_ACCESS_SECRET,
         accessExpiry: process.env.JWT_ACCESS_EXPIRY || '15m',
     },
-    // Secret partagé avec tous les services qui appellent les routes /internal
-    // order-service, cart-service, admin-service utilisent ce même secret
     internalSecret: process.env.INTERNAL_PRODUCT_SECRET,
     cloudinary: {
         cloudName: process.env.CLOUDINARY_CLOUD_NAME,
@@ -56,5 +54,12 @@ export const ENV = Object.freeze({
     sentry: {
         dsn: process.env.SENTRY_DSN,
         tracesSampleRate: parseFloat(process.env.SENTRY_TRACES_SAMPLE_RATE) || 0.1,
+    },
+
+    rateLimit: {
+        windowMs: Number(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 minutes par défaut
+        max: Number(process.env.RATE_LIMIT_MAX) || 100, // 100 requêtes max par fenêtre
+        authWindowMs: Number(process.env.AUTH_RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
+        authMax: Number(process.env.AUTH_RATE_LIMIT_MAX) || 5, // 5 tentatives max pour l'auth
     },
 });
