@@ -2,9 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // -----------------------------------------------------------------------------
 // Mock Stripe
-//
-// On expose mockSessionCreate et mockConstructEvent via StripeMock.instanceMocks
-// pour y accéder après l'import, une fois que vitest a résolu les mocks.
 // -----------------------------------------------------------------------------
 vi.mock('stripe', () => {
     const mockSessionCreate = vi.fn();
@@ -25,8 +22,8 @@ vi.mock('stripe', () => {
 // -----------------------------------------------------------------------------
 // Mock environment
 //
-// Nécessaire car payment.service.js lit ENV.stripe.secretKey au chargement du
-// module. Sans ce mock, le service ne s'initialise pas en environnement de test.
+// payment.service.js lit ENV.stripe.secretKey au chargement du module.
+// Sans ce mock, le service ne s'initialise pas en environnement de test.
 // -----------------------------------------------------------------------------
 vi.mock('../config/environment.js', () => ({
     ENV: {
@@ -45,10 +42,6 @@ vi.mock('../config/environment.js', () => ({
 
 // -----------------------------------------------------------------------------
 // Mock database
-//
-// Le pool retourne un client transactionnel fictif.
-// Le client est passé en 4e argument à ordersRepo.updateStatus — c'est pour ça
-// que l'assertion originale (2 args) échouait.
 // -----------------------------------------------------------------------------
 vi.mock('../config/database.js', () => ({
     pgPool: {
@@ -61,18 +54,6 @@ vi.mock('../config/database.js', () => ({
 
 // -----------------------------------------------------------------------------
 // Mock repositories
-//
-// Corrections apportées par rapport à la version initiale :
-//
-//   1. paymentsRepo manquait entièrement.
-//      Le service appelle paymentsRepo.create() dans createSession() et
-//      paymentsRepo.updateByIntentId() dans processStripeWebhook().
-//      Sans ce mock, vitest lève "No paymentsRepo export is defined".
-//
-//   2. productsRepo manquait entièrement.
-//      Le service appelle productsRepo.findById() pour invalider le cache Redis
-//      après confirmation du paiement (invalidateProductCache).
-//      Sans ce mock, vitest lève "No productsRepo export is defined".
 // -----------------------------------------------------------------------------
 vi.mock('../repositories/index.js', () => ({
     ordersRepo: {
@@ -82,9 +63,7 @@ vi.mock('../repositories/index.js', () => ({
             { productName: 'Montre', price: 100, quantity: 1 }
         ])
     },
-    inventoryRepo: {
-        confirmSale: vi.fn()
-    },
+    inventoryRepo: { confirmSale: vi.fn() },
     paymentsRepo: {
         create: vi.fn().mockResolvedValue({ id: 'pay_1' }),
         updateByIntentId: vi.fn().mockResolvedValue({ id: 'pay_1', status: 'SUCCESS' })
@@ -94,8 +73,29 @@ vi.mock('../repositories/index.js', () => ({
     }
 }));
 
+// -----------------------------------------------------------------------------
+// Mock orderClient
+//
+// payment.service.js délègue toutes les lectures/écritures de commandes
+// à l'order-service via HTTP (orderClient). Sans ce mock, les tests
+// tentent de faire de vrais appels fetch() vers ORDER_SERVICE_URL qui est
+// undefined en CI → "Failed to parse URL from undefined/internal/orders/..."
+//
+// Méthodes mockées :
+//   findById    → createSession(), getPaymentStatus(), _triggerPostPaymentNotifications()
+//   markAsPaid  → _handleCheckoutCompleted()
+//   cancelOrder → _handleCheckoutExpired()
+// -----------------------------------------------------------------------------
+vi.mock('../clients/order.client.js', () => ({
+    orderClient: {
+        findById: vi.fn(),
+        markAsPaid: vi.fn().mockResolvedValue({ success: true }),
+        cancelOrder: vi.fn().mockResolvedValue({ success: true }),
+    }
+}));
+
 import { paymentService } from '../services/payment.service.js';
-import { ordersRepo } from '../repositories/index.js';
+import { orderClient } from '../clients/order.client.js';
 import Stripe from 'stripe';
 
 describe('PaymentService', () => {
@@ -106,32 +106,18 @@ describe('PaymentService', () => {
     });
 
     // -------------------------------------------------------------------------
-    // Test 1 : traitement d'un webhook Stripe
+    // Test 1 : traitement d'un webhook Stripe checkout.session.completed
     //
-    // Corrections apportées :
-    //
-    //   1. ordersRepo.findById mocké avec un userId valide.
-    //      Le service appelle findById() après updateStatus() pour récupérer
-    //      la commande et déclencher les notifications (triggerPostPaymentNotifications).
-    //      Sans userId dans l'objet retourné, le service crash avec
-    //      "Cannot read properties of undefined (reading 'userId')".
-    //
-    //   2. L'événement mock inclut désormais amount_total et payment_intent.
-    //      Sans ces champs, le service construisait { amount: NaN, paymentIntentId: undefined }
-    //      ce qui causait une valeur NaN dans l'assertion.
-    //
-    //   3. L'assertion toHaveBeenCalledWith est corrigée pour refléter la
-    //      signature réelle de ordersRepo.updateStatus() :
-    //        updateStatus(orderId, status, paymentData, dbClient)
-    //      On utilise expect.objectContaining pour les deux derniers arguments
-    //      dont le contenu exact dépend du service, pas du test.
+    // payment.service._handleCheckoutCompleted() appelle orderClient.markAsPaid().
+    // On vérifie que markAsPaid est appelé avec les bonnes données extraites
+    // de l'event Stripe (orderId, provider, paymentIntentId, amount).
     // -------------------------------------------------------------------------
     it('devrait valider et mettre à jour la commande via webhook', async () => {
         const mockEvent = {
             type: 'checkout.session.completed',
             data: {
                 object: {
-                    metadata: { orderId: 'ord_123' },
+                    metadata: { orderId: 'ord_123', isGuestCheckout: 'false' },
                     amount_total: 19999,
                     payment_intent: 'pi_test_456'
                 }
@@ -140,12 +126,12 @@ describe('PaymentService', () => {
 
         mockConstructEvent.mockReturnValue(mockEvent);
 
-        // L'ordre doit contenir userId pour que triggerPostPaymentNotifications
-        // puisse récupérer les informations de l'utilisateur sans crasher.
-        ordersRepo.findById.mockResolvedValue({
+        // _triggerPostPaymentNotifications() appelle orderClient.findById()
+        // pour récupérer les données de la commande après paiement.
+        orderClient.findById.mockResolvedValue({
             id: 'ord_123',
             userId: 'user_abc',
-            status: 'PENDING',
+            status: 'PAID',
             totalAmount: 199.99
         });
 
@@ -153,22 +139,13 @@ describe('PaymentService', () => {
 
         expect(result.received).toBe(true);
 
-        // Le service passe 4 arguments à updateStatus :
-        //   1. orderId
-        //   2. nouveau statut
-        //   3. données de paiement extraites de l'event Stripe
-        //   4. client transactionnel PostgreSQL
-        expect(ordersRepo.updateStatus).toHaveBeenCalledWith(
+        // markAsPaid doit être appelé avec orderId + données Stripe
+        expect(orderClient.markAsPaid).toHaveBeenCalledWith(
             'ord_123',
-            'PAID',
             expect.objectContaining({
                 provider: 'STRIPE',
                 paymentIntentId: 'pi_test_456',
                 amount: 199.99
-            }),
-            expect.objectContaining({
-                query: expect.any(Function),
-                release: expect.any(Function)
             })
         );
     });
@@ -176,15 +153,16 @@ describe('PaymentService', () => {
     // -------------------------------------------------------------------------
     // Test 2 : création d'une session de paiement Stripe Checkout
     //
-    // Correction : paymentsRepo.create() étant maintenant mocké, le service
-    // peut enregistrer le paiement en base sans lever d'erreur.
+    // payment.service.createSession() appelle orderClient.findById()
+    // pour lire la commande avant de créer la session Stripe.
     // -------------------------------------------------------------------------
     it('devrait créer une session de paiement', async () => {
-        ordersRepo.findById.mockResolvedValue({
+        orderClient.findById.mockResolvedValue({
             id: 'ord_1',
             status: 'PENDING',
             totalAmount: 199.99,
-            userId: 'user_abc'
+            userId: 'user_abc',
+            items: [{ name: 'Montre', price: 199.99, quantity: 1 }]
         });
 
         mockSessionCreate.mockResolvedValue({
@@ -196,5 +174,7 @@ describe('PaymentService', () => {
 
         expect(session.id).toBe('sess_123');
         expect(mockSessionCreate).toHaveBeenCalled();
+        // findById doit avoir été appelé avec le bon orderId
+        expect(orderClient.findById).toHaveBeenCalledWith('ord_1');
     });
 });
