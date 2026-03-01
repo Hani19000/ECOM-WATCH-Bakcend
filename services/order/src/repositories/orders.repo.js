@@ -258,13 +258,56 @@ export const ordersRepo = {
   // LECTURE — ACCÈS PROPRIÉTAIRE AUTHENTIFIÉ
   // ─────────────────────────────────────────────────────────────────────
 
-  async listByUserId(userId) {
+  async listByUserId(userId, { page = 1, limit = 10, status = null } = {}) {
     validateUUID(userId, 'userId');
-    const { rows } = await pgPool.query(
-      `SELECT * FROM orders WHERE user_id = $1 ORDER BY created_at DESC`,
-      [userId]
-    );
-    return mapRows(rows);
+    const parsedPage = Math.max(1, parseInt(page, 10) || 1);
+    const parsedLimit = Math.max(1, Math.min(100, parseInt(limit, 10) || 10));
+    const offset = (parsedPage - 1) * parsedLimit;
+
+    const values = [userId];
+    let statusFilter = '';
+    if (status) {
+      values.push(status);
+      statusFilter = `AND status = $${values.length}`;
+    }
+
+    // Compte total + données en parallèle pour éviter deux aller-retours séquentiels
+    const [dataResult, countResult] = await Promise.all([
+      pgPool.query(
+        `SELECT
+               o.*,
+               COALESCE(
+                 json_agg(
+                   ${ITEM_JSON_OBJECT}
+                 ) FILTER (WHERE oi.id IS NOT NULL),
+                 '[]'
+               ) AS items
+             FROM orders o
+             LEFT JOIN order_items oi ON oi.order_id = o.id
+             LEFT JOIN product.product_variants pv ON pv.id = oi.variant_id
+             WHERE o.user_id = $1 ${statusFilter}
+             GROUP BY o.id
+             ORDER BY o.created_at DESC
+             LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+        [...values, parsedLimit, offset]
+      ),
+      pgPool.query(
+        `SELECT COUNT(*) FROM orders WHERE user_id = $1 ${statusFilter}`,
+        values
+      ),
+    ]);
+
+    const total = parseInt(countResult.rows[0].count, 10);
+
+    return {
+      orders: mapRows(dataResult.rows),
+      pagination: {
+        page: parsedPage,
+        limit: parsedLimit,
+        total,
+        totalPages: Math.ceil(total / parsedLimit) || 1,
+      },
+    };
   },
 
   /**
@@ -312,16 +355,22 @@ export const ordersRepo = {
   },
 
   async getUserStats(userId) {
+    validateUUID(userId, 'userId');
     const { rows } = await pgPool.query(
       `SELECT
-               COUNT(*) as "totalOrders",
-               COUNT(*) FILTER (WHERE status IN ('PENDING', 'PAID', 'PROCESSING', 'SHIPPED')) as "pendingOrders",
-               COALESCE(SUM(total_amount), 0) as "totalSpent"
+               COUNT(*)::int                                                                       AS "totalOrders",
+               COUNT(*) FILTER (WHERE status IN ('PENDING', 'PAID', 'PROCESSING', 'SHIPPED'))::int AS "pendingOrders",
+               COALESCE(SUM(total_amount), 0)::numeric                                             AS "totalSpent"
              FROM orders
              WHERE user_id = $1`,
       [userId]
     );
-    return rows[0];
+    const row = rows[0];
+    return {
+      totalOrders: parseInt(row.totalOrders, 10),
+      pendingOrders: parseInt(row.pendingOrders, 10),
+      totalSpent: parseFloat(row.totalSpent),
+    };
   },
 
   // ─────────────────────────────────────────────────────────────────────

@@ -37,7 +37,9 @@ const finalConfig = {
 export const pgPool = new Pool(finalConfig);
 
 pgPool.on('connect', (client) => {
-    client.query('SET search_path TO auth, public')
+    // "order" est un mot réservé SQL — les guillemets sont obligatoires.
+    // Le schéma auth reste accessible via son nom qualifié complet (auth.users).
+    client.query('SET search_path TO "order", public')
         .catch((err) => logError(err, { context: 'pgPool search_path init' }));
 });
 

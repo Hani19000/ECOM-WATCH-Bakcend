@@ -443,29 +443,9 @@ class OrderService {
     }
 
     async getOrderHistory(userId, options = {}) {
-        const { page = 1, limit = 10, status = null } = options;
-        const allOrders = (await ordersRepo.listByUserId(userId)) || [];
-
-        const filtered = status ? allOrders.filter((o) => o.status === status) : allOrders;
-        const parsedPage = parseInt(page, 10) || 1;
-        const parsedLimit = parseInt(limit, 10) || 10;
-        const offset = (parsedPage - 1) * parsedLimit;
-        const paginated = filtered.slice(offset, offset + parsedLimit);
-
-        return {
-            orders: await Promise.all(
-                paginated.map(async (order) => ({
-                    ...order,
-                    items: await ordersRepo.listItems(order.id),
-                }))
-            ),
-            pagination: {
-                page: parsedPage,
-                limit: parsedLimit,
-                total: filtered.length,
-                totalPages: Math.ceil(filtered.length / parsedLimit) || 1,
-            },
-        };
+        // La pagination et le filtrage sont désormais faits en SQL dans ordersRepo.listByUserId
+        // pour éviter de charger toutes les commandes en mémoire (N+1 et DeprecationWarning pg).
+        return await ordersRepo.listByUserId(userId, options);
     }
 
     // ─────────────────────────────────────────────────────────────────────
