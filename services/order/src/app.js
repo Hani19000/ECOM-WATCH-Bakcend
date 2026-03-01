@@ -9,8 +9,8 @@ import * as Sentry from '@sentry/node';
 import express from 'express';
 import cookieParser from 'cookie-parser';
 
-import { requestLogger } from './middleware/logger.middleware.js';
-import { errorHandler } from './middleware/erroHandler.middleware.js';
+import { requestLogger } from './middlewares/logger.middleware.js';
+import { errorHandler } from './middlewares/erroHandler.middleware.js';
 import {
     helmetMiddleware,
     corsMiddleware,

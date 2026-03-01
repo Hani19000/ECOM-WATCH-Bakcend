@@ -11,7 +11,7 @@
 import { Router } from 'express';
 import { orderService } from '../services/orders.service.js';
 import { ordersRepo } from '../repositories/index.js';
-import { fromMonolith, fromAuthService } from '../middleware/internal.middleware.js';
+import { fromMonolith, fromAuthService } from '../middlewares/internal.middleware.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
 import { ValidationError } from '../utils/appError.js';
