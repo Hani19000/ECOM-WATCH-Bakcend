@@ -17,7 +17,7 @@ const requiredEnv = [
     'STRIPE_WEBHOOK_SECRET',
     'ORDER_SERVICE_URL',         // Appels HTTP vers order-service /internal/orders/*
     'INTERNAL_ORDER_SECRET',     // Secret partagé avec l'order-service (header X-Internal-Secret)
-    // 'PAYMENT_SERVICE_URL',      
+    // 'INTERNAL_PAYMENT_SECRET',   // Secret partagé avec le monolith (webhook Stripe)   
     'CLIENT_URL',
     'RESEND_API_KEY',
 ];

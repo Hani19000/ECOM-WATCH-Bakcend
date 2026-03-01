@@ -1,21 +1,9 @@
-/**
- * @module Config/Security
- *
- * Middlewares de sécurité et rate limiters du payment-service.
- *
- * Rate limiters spécifiques aux flux de paiement :
- * - checkoutLimiter : empêche la création de sessions en masse (fraude, DDoS)
- * - statusLimiter   : prévient le polling abusif sur le statut de paiement
- * - generalLimiter  : rempart global sur toutes les autres routes
- *
- * Les webhooks Stripe ne sont PAS soumis au rate limiter — Stripe peut
- * renvoyer des events légitimement plusieurs fois et ne doit pas être bloqué.
- */
 import helmet from 'helmet';
 import cors from 'cors';
 import compression from 'compression';
 import rateLimit from 'express-rate-limit';
 import { ENV } from './environment.js';
+import { ERRORS } from '../constants/errors.js';
 import { logInfo } from '../utils/logger.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
 import { NotFoundError } from '../utils/appError.js';
@@ -26,7 +14,8 @@ import { NotFoundError } from '../utils/appError.js';
 
 /**
  * Extrait l'IP réelle du client.
- * Indispensable pour les plateformes PaaS (Render, Heroku) derrière un Load Balancer.
+ * Indispensable pour les plateformes PaaS (Render, Heroku, Vercel) qui
+ * placent l'app derrière un Load Balancer.
  */
 const getClientIp = (req) => {
     const forwardedFor = req.headers['x-forwarded-for'];
@@ -43,13 +32,14 @@ const getAllowedOrigins = () => {
     return [];
 };
 
+// Fusion intelligente des origines .env et des origines par défaut
 const getOrigins = () => {
-    const envOrigins = ENV.cors.origins;
+    const envOrigins = process.env.CORS_ORIGINS?.split(',').map((origin) => origin.trim()) || [];
     const defaultOrigins = getAllowedOrigins();
     const combined = [...envOrigins, ...defaultOrigins];
 
-    const uniqueStrings = [...new Set(combined.filter((o) => typeof o === 'string'))];
-    const regexes = combined.filter((o) => o instanceof RegExp);
+    const uniqueStrings = [...new Set(combined.filter((origin) => typeof origin === 'string'))];
+    const regexes = combined.filter((origin) => origin instanceof RegExp);
 
     return [...uniqueStrings, ...regexes];
 };
@@ -57,34 +47,42 @@ const getOrigins = () => {
 const origins = getOrigins();
 
 // ================================================================
-// MIDDLEWARES GLOBAUX
+// MIDDLEWARES DE SÉCURITÉ (GLOBAL)
 // ================================================================
 
+/**
+ * Définit la Content Security Policy (CSP) pour bloquer les scripts malveillants.
+ */
 export const helmetMiddleware = helmet({
     contentSecurityPolicy: {
         directives: {
             defaultSrc: ["'self'"],
             scriptSrc: ["'self'"],
             styleSrc: ["'self'", "'unsafe-inline'"],
-            imgSrc: ["'self'", 'data:'],
+            imgSrc: ["'self'", 'data:', 'blob:', 'https://res.cloudinary.com'],
             connectSrc: [
                 "'self'",
                 'https://ecomwatch.vercel.app',
+                'https://ecom-watch.onrender.com',
                 'https://o4510681965199360.ingest.de.sentry.io',
             ],
-            fontSrc: ["'self'"],
+            fontSrc: ["'self'", 'data:'],
             objectSrc: ["'none'"],
+            mediaSrc: ["'self'"],
             frameSrc: ["'none'"],
             upgradeInsecureRequests: [],
         },
     },
     hsts: {
-        maxAge: 31536000,
+        maxAge: 31536000, // 1 an
         includeSubDomains: true,
         preload: true,
     },
 });
 
+/**
+ * Vérifie strictement l'origine des requêtes.
+ */
 export const corsMiddleware = cors({
     origin: (origin, callback) => {
         const isAllowed =
@@ -99,16 +97,19 @@ export const corsMiddleware = cors({
             ? callback(null, true)
             : callback(new Error(`Origine non autorisée par CORS : ${origin}`));
     },
-    methods: ['GET', 'POST'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
     credentials: true,
 });
 
+/**
+ * Filtre personnalisé pour désactiver la compression via header si besoin.
+ */
 export const compressResponse = compression({
     filter: (req, res) => {
         if (req.headers['x-no-compression']) return false;
         return compression.filter(req, res);
     },
-    level: 6,
+    level: 6, // Bon compromis CPU / Taille
 });
 
 // ================================================================
@@ -116,7 +117,7 @@ export const compressResponse = compression({
 // ================================================================
 
 /**
- * Limiteur Global — rempart contre le scraping et les DDoS basiques.
+ * Limiteur Global — premier rempart contre le scraping massif et les attaques DDoS.
  */
 export const generalLimiter = rateLimit({
     windowMs: ENV.rateLimit.windowMs,
@@ -124,48 +125,114 @@ export const generalLimiter = rateLimit({
     validate: { ip: false },
     standardHeaders: true,
     legacyHeaders: false,
-    keyGenerator: getClientIp,
+    keyGenerator: (req) => getClientIp(req),
 });
 
 /**
- * Limiteur Checkout — empêche la création de sessions Stripe en masse.
- * Une session Stripe a un coût côté Stripe ; limiter sa création réduit
- * le risque de fraude et les coûts API.
+ * Limiteur Authentification — strict pour empêcher le brute-force sur les identifiants.
  */
-export const checkoutLimiter = rateLimit({
-    windowMs: ENV.rateLimit.checkoutWindowMs,
-    max: ENV.rateLimit.checkoutMax,
+export const authLimiter = rateLimit({
+    windowMs: ENV.rateLimit.authWindowMs,
+    max: ENV.rateLimit.authMax,
     validate: { ip: false },
     standardHeaders: true,
     legacyHeaders: false,
-    keyGenerator: (req) => `checkout:${getClientIp(req)}`,
+    keyGenerator: (req) => getClientIp(req),
     handler: (req, res) => {
-        logInfo(`Rate limit checkout dépassé : IP=${getClientIp(req)}`);
+        logInfo(`Tentative de spam détectée depuis l'IP : ${getClientIp(req)}`);
         res.status(HTTP_STATUS.TOO_MANY_REQUESTS).json({
             status: HTTP_STATUS.TOO_MANY_REQUESTS,
-            message: 'Trop de tentatives de paiement. Veuillez réessayer dans une minute.',
-            retryAfter: '1 minute',
+            error: ERRORS.AUTH.TOO_MANY_ATTEMPTS,
+            message: 'Trop de tentatives, veuillez réessayer plus tard.',
         });
     },
 });
 
 /**
- * Limiteur Status — prévient le polling abusif sur le statut de paiement.
- * Un client légitime poll 3-5 fois maximum après redirection Stripe.
+ * Limiteur Changement de Mot de Passe — protège contre le brute-force de l'ancien mot de passe.
  */
-export const statusLimiter = rateLimit({
-    windowMs: 60 * 1000, // 1 minute
-    max: 30,
+export const passwordChangeLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 3,
     validate: { ip: false },
     standardHeaders: true,
     legacyHeaders: false,
-    keyGenerator: (req) => `payment-status:${getClientIp(req)}`,
+    keyGenerator: (req) => `password-change:${getClientIp(req)}:${req.user?.id || 'anonymous'}`,
     handler: (req, res) => {
-        logInfo(`Rate limit status payment dépassé : IP=${getClientIp(req)}`);
+        logInfo(
+            `Rate limit changement MDP dépassé : IP=${getClientIp(req)}, User=${req.user?.id || 'anonymous'}`
+        );
         res.status(HTTP_STATUS.TOO_MANY_REQUESTS).json({
             status: HTTP_STATUS.TOO_MANY_REQUESTS,
-            message: 'Trop de vérifications de statut. Veuillez patienter.',
-            retryAfter: '1 minute',
+            error: 'TOO_MANY_ATTEMPTS',
+            message: 'Trop de tentatives de changement de mot de passe. Veuillez réessayer dans 15 minutes.',
+            retryAfter: '15 minutes',
+        });
+    },
+});
+
+/**
+ * Limiteur Suivi de Commande Guest — protège contre l'énumération des IDs de commande.
+ */
+export const trackingGuestLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 5000,
+    validate: { ip: false },
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => `tracking-guest:${getClientIp(req)}`,
+    handler: (req, res) => {
+        logInfo(`Rate limit suivi guest dépassé : IP=${getClientIp(req)}`);
+        res.status(HTTP_STATUS.TOO_MANY_REQUESTS).json({
+            status: HTTP_STATUS.TOO_MANY_REQUESTS,
+            error: 'TOO_MANY_ATTEMPTS',
+            message: 'Trop de tentatives de recherche. Veuillez réessayer dans 15 minutes.',
+            retryAfter: '15 minutes',
+        });
+    },
+});
+
+/**
+ * Limiteur Profil Utilisateur — permissif pour autoriser la navigation normale et le polling.
+ */
+export const profileGeneralLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 5000,
+    validate: { ip: false },
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) =>
+        `profile-general:${getClientIp(req)}:${req.user?.id || 'anonymous'}`,
+    handler: (req, res) => {
+        logInfo(
+            `Rate limit profil général dépassé : IP=${getClientIp(req)}, User=${req.user?.id || 'anonymous'}`
+        );
+        res.status(HTTP_STATUS.TOO_MANY_REQUESTS).json({
+            status: HTTP_STATUS.TOO_MANY_REQUESTS,
+            error: 'TOO_MANY_REQUESTS',
+            message: 'Trop de requêtes. Veuillez réessayer dans 15 minutes.',
+            retryAfter: '15 minutes',
+        });
+    },
+});
+
+/**
+ * Limiteur Réinitialisation de Mot de Passe — clé par IP uniquement car l'utilisateur est déconnecté.
+ */
+export const passwordResetLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000, // 1 heure
+    max: 5,
+    validate: { ip: false },
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => `password-reset:${getClientIp(req)}`,
+    handler: (req, res) => {
+        logInfo(`Rate limit reset MDP dépassé : IP=${getClientIp(req)}`);
+        res.status(HTTP_STATUS.TOO_MANY_REQUESTS).json({
+            status: HTTP_STATUS.TOO_MANY_REQUESTS,
+            error: 'TOO_MANY_ATTEMPTS',
+            message: 'Trop de tentatives. Veuillez réessayer dans une heure.',
+            retryAfter: '1 heure',
         });
     },
 });
@@ -174,6 +241,9 @@ export const statusLimiter = rateLimit({
 // GESTION DES ERREURS
 // ================================================================
 
+/**
+ * Middleware 404 — intercepte toutes les requêtes sans route correspondante.
+ */
 export const notFound = (req, _res, next) => {
     next(new NotFoundError('Route', req.originalUrl));
 };
