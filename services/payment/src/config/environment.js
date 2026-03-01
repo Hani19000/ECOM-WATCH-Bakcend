@@ -2,19 +2,22 @@
  * @module Config/Environment
  *
  * Source unique de vérité pour les variables d'environnement du payment-service.
- * Toutes les variables sont validées au démarrage — fail-fast avant toute connexion.
+ * Toutes les variables obligatoires sont validées ici au démarrage (fail-fast),
+ * ce qui garantit que l'absence d'une variable est détectée dès le lancement
+ * plutôt qu'à l'exécution d'une requête en production.
  */
 import 'dotenv/config';
 
 const requiredEnv = [
     'PORT',
-    'JWT_ACCESS_SECRET',        // Valider les access tokens émis par l'auth-service
-    'DATABASE_URL',             // Connexion Neon (schéma payment)
-    'REDIS_URL',                // Upstash — idempotence des webhooks Stripe
+    'JWT_ACCESS_SECRET',         // Valider les access tokens émis par l'auth-service
+    'DATABASE_URL',              // Connexion Neon (schéma payment)
+    'REDIS_URL',                 // Upstash — idempotence des webhooks Stripe
     'STRIPE_SECRET_KEY',
     'STRIPE_WEBHOOK_SECRET',
-    'ORDER_SERVICE_URL',        // Appels HTTP vers order-service /internal/orders/*
-    'INTERNAL_ORDER_SECRET',    // Secret partagé avec l'order-service (header X-Internal-Secret)
+    'ORDER_SERVICE_URL',         // Appels HTTP vers order-service /internal/orders/*
+    'INTERNAL_ORDER_SECRET',     // Secret partagé avec l'order-service (header X-Internal-Secret)
+    'PAYMENT_SERVICE_URL',       // URL publique de CE service (pour les success_url Stripe)
     'CLIENT_URL',
     'RESEND_API_KEY',
 ];
@@ -27,7 +30,9 @@ if (process.env.NODE_ENV === 'production') {
 const missing = requiredEnv.filter((key) => !process.env[key]);
 
 if (missing.length > 0) {
-    console.error(`[FATAL] [payment-service] Variables d'environnement manquantes : ${missing.join(', ')}`);
+    console.error(
+        `[FATAL] [payment-service] Variables d'environnement manquantes : ${missing.join(', ')}`
+    );
     process.exit(1);
 }
 
@@ -60,9 +65,11 @@ export const ENV = Object.freeze({
         webhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
     },
 
-    // Communication vers l'order-service
     services: {
         orderServiceUrl: process.env.ORDER_SERVICE_URL,
+        // URL publique du payment-service lui-même, utilisée pour construire
+        // les success_url et cancel_url transmises à Stripe lors de la création de session.
+        paymentServiceUrl: process.env.PAYMENT_SERVICE_URL,
         // Timeout en ms — en dessous on préfère échouer vite plutôt que bloquer Stripe
         httpTimeoutMs: Number(process.env.INTERNAL_HTTP_TIMEOUT_MS) || 5000,
     },
@@ -88,7 +95,7 @@ export const ENV = Object.freeze({
         origins: process.env.CORS_ORIGINS?.split(',').map((o) => o.trim()) || [],
     },
 
-    clientUrl: process.env.CLIENT_URL || 'http://localhost:3000',
+    clientUrl: process.env.CLIENT_URL || 'http://localhost:5173',
 
     email: {
         apiKey: process.env.RESEND_API_KEY,

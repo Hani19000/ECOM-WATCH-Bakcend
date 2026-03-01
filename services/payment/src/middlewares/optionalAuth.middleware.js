@@ -1,19 +1,22 @@
 /**
  * @module Middleware/OptionalAuth
  *
- * Middleware d'authentification optionnelle.
- * Contrairement à `protect`, ne bloque pas la requête si l'utilisateur n'est pas authentifié.
- * Utilisé pour les flux guest : checkout, pages publiques avec contenu personnalisé.
+ * Authentification optionnelle — ne bloque pas si l'utilisateur n'est pas connecté.
+ * Utilisé pour les flux guest : création de session Stripe, vérification de statut.
  *
- * Token valide  → req.user est hydraté avec les données utilisateur et ses rôles.
- * Token absent ou invalide → req.user reste undefined, la requête continue normalement.
+ * Token valide  → req.user est hydraté depuis le payload JWT (stateless, pas de DB)
+ * Token absent  → req.user = undefined, la requête continue en mode guest
+ * Token invalide → req.user = undefined, la requête continue en mode guest
+ *
+ * Même principe stateless que auth.middleware.js :
+ * le payment-service ne possède pas le schéma auth et ne doit pas y accéder.
  */
 import { tokenService } from '../services/token.service.js';
-import { usersRepo, rolesRepo } from '../repositories/index.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 
 export const optionalAuth = asyncHandler(async (req, _res, next) => {
     let token;
+
     if (req.headers.authorization?.startsWith('Bearer')) {
         token = req.headers.authorization.split(' ')[1];
     }
@@ -31,23 +34,16 @@ export const optionalAuth = asyncHandler(async (req, _res, next) => {
             return next();
         }
 
-        const user = await usersRepo.findById(decoded.id || decoded.sub);
-
-        if (!user) {
-            req.user = undefined;
-            return next();
-        }
-
-        const roles = await rolesRepo.listUserRoles(user.id);
-
         req.user = {
-            ...user,
-            roles: roles.map((role) => role.name),
+            id: decoded.sub || decoded.id,
+            email: decoded.email,
+            roles: decoded.roles ?? [],
         };
 
         next();
     } catch {
-        // Token malformé ou erreur DB — on continue sans authentification
+        // Token malformé ou signature invalide — on continue en mode guest
+        // sans bloquer la requête ni exposer l'erreur interne.
         req.user = undefined;
         next();
     }

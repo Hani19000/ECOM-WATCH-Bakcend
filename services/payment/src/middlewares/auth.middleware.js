@@ -1,17 +1,27 @@
 /**
  * @module Middleware/Auth
  *
- * Protège les routes en vérifiant le JWT Access Token présent dans le header Authorization.
- * Hydrate req.user avec les données de l'utilisateur et ses rôles pour les middlewares suivants.
+ * Protège les routes en vérifiant le JWT Access Token.
+ *
+ * Ce middleware est intentionnellement STATELESS : il vérifie la signature du token
+ * et extrait le payload sans aucune requête en base de données.
+ *
+ * Pourquoi stateless dans un microservice :
+ *   - Le payment-service ne possède pas le schéma auth → pas d'accès à auth.users
+ *   - Les données utilisateur (id, email, roles) sont signées dans le JWT par l'auth-service
+ *   - La durée de vie courte du token (15 min) limite l'impact d'un token compromis
+ *   - Chaque requête en base pour valider un token ajouterait ~5-20ms inutilement
+ *
+ * Hydrate req.user avec : { id, email, roles }
  */
 import { tokenService } from '../services/token.service.js';
-import { usersRepo, rolesRepo } from '../repositories/index.js';
 import { AppError } from '../utils/appError.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 
-export const protect = asyncHandler(async (req, res, next) => {
+export const protect = asyncHandler(async (req, _res, next) => {
     let token;
+
     if (req.headers.authorization?.startsWith('Bearer')) {
         token = req.headers.authorization.split(' ')[1];
     }
@@ -21,24 +31,17 @@ export const protect = asyncHandler(async (req, res, next) => {
     }
 
     const decoded = tokenService.verifyAccessToken(token);
+
     if (!decoded) {
         throw new AppError('Token invalide ou expiré.', HTTP_STATUS.UNAUTHORIZED);
     }
 
-    const user = await usersRepo.findById(decoded.id || decoded.sub);
-    if (!user) {
-        throw new AppError("L'utilisateur associé à ce token n'existe plus.", HTTP_STATUS.UNAUTHORIZED);
-    }
-
-    if (user.isActive === false) {
-        throw new AppError('Ce compte a été suspendu. Accès révoqué.', HTTP_STATUS.FORBIDDEN);
-    }
-
-    const roles = await rolesRepo.listUserRoles(user.id);
-
+    // Hydratation de req.user depuis le payload signé — pas de requête DB.
+    // decoded.sub est le standard JWT pour l'identifiant sujet (userId).
     req.user = {
-        ...user,
-        roles: roles.map((r) => r.name),
+        id: decoded.sub || decoded.id,
+        email: decoded.email,
+        roles: decoded.roles ?? [],
     };
 
     next();
