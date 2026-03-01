@@ -444,10 +444,11 @@ class OrderService {
 
     async getOrderHistory(userId, options = {}) {
         const { page = 1, limit = 10, status = null } = options;
-        const allOrders = await ordersRepo.listByUserId(userId);
+        const allOrders = (await ordersRepo.listByUserId(userId)) || [];
+
         const filtered = status ? allOrders.filter((o) => o.status === status) : allOrders;
-        const parsedPage = parseInt(page, 10);
-        const parsedLimit = parseInt(limit, 10);
+        const parsedPage = parseInt(page, 10) || 1;
+        const parsedLimit = parseInt(limit, 10) || 10;
         const offset = (parsedPage - 1) * parsedLimit;
         const paginated = filtered.slice(offset, offset + parsedLimit);
 
@@ -462,7 +463,7 @@ class OrderService {
                 page: parsedPage,
                 limit: parsedLimit,
                 total: filtered.length,
-                totalPages: Math.ceil(filtered.length / parsedLimit),
+                totalPages: Math.ceil(filtered.length / parsedLimit) || 1,
             },
         };
     }

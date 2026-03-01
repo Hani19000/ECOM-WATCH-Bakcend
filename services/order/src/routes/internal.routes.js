@@ -167,7 +167,10 @@ router.get(
     asyncHandler(async (req, res) => {
         validateUUID(req.params.userId, 'userId');
 
-        const stats = await ordersRepo.getUserStats(req.params.userId);
+        const stats = (await ordersRepo.getUserStats(req.params.userId)) || {
+            totalOrders: 0,
+            totalSpent: 0
+        };
 
         res.status(HTTP_STATUS.OK).json({
             status: 'success',
