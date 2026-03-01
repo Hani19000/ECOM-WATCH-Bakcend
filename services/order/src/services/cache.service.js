@@ -3,6 +3,8 @@
  *
  * Encapsule l'accès à Redis avec sérialisation/désérialisation JSON automatique.
  * Singleton pour garantir une seule connexion Redis partagée dans l'application.
+ *
+ * Compatible Upstash (TLS requis) via `REDIS_URL` avec scheme `rediss://`.
  */
 import { createClient } from 'redis';
 import { ENV } from '../config/environment.js';
@@ -12,12 +14,7 @@ class CacheService {
     constructor() {
         if (CacheService.instance) return CacheService.instance;
 
-        const { host, port, password } = ENV.database.redis;
-
-        this.client = createClient({
-            url: `redis://${host}:${port}`,
-            password,
-        });
+        this.client = createClient({ url: ENV.database.redis.url });
 
         this.client.on('error', (err) => logError(err, { context: 'Redis Client Error' }));
         this.client.on('connect', () => logInfo('Redis connecté avec succès'));

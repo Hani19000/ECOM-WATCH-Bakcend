@@ -2,15 +2,21 @@
  * @module Service/Order
  *
  * Orchestre la création, l'annulation et le suivi des commandes.
- * Source de vérité pour le cycle de vie d'une commande et la libération de stock.
+ * Source de vérité pour le cycle de vie d'une commande.
+ *
+ * ARCHITECTURE INTER-SERVICES :
+ * Les opérations de stock (reserve/release) passent par HTTP vers le monolith
+ * au lieu d'appels directs en base. En cas d'échec, une saga compensatoire
+ * annule les réservations déjà effectuées pour garantir la cohérence.
+ *
+ * PÉRIMÈTRE DE CE SERVICE :
+ * - Tables : orders, order_items, shipments (schéma "order")
+ * - Appels HTTP : inventoryClient (stock), productClient (prix, poids)
+ * - Calculs purs : shippingService, taxService (aucune DB)
  */
-import {
-    ordersRepo,
-    inventoryRepo,
-    cartsRepo,
-    shipmentsRepo,
-    productsRepo,
-} from '../repositories/index.js';
+import { ordersRepo, shipmentsRepo } from '../repositories/index.js';
+import { inventoryClient } from '../clients/inventory.client.js';
+import { productClient } from '../clients/product.client.js';
 import { shippingService } from './shipping.service.js';
 import { taxService } from './tax.service.js';
 import { notificationService } from './notifications/notification.service.js';
@@ -89,36 +95,59 @@ class OrderService {
         }
     }
 
-    async #resolveEffectivePrice(variantId, basePrice, client) {
-        const promotionData = await productsRepo.findActivePromotionPrice(variantId, client);
+    /**
+     * Résout le prix effectif en tenant compte des promotions actives.
+     * Délègue au monolith via HTTP — retourne le prix de base en cas d'erreur
+     * pour ne pas bloquer la création de commande.
+     */
+    async #resolveEffectivePrice(variantId, basePrice) {
+        try {
+            const promotionData = await productClient.getPromotionPrice(variantId);
 
-        if (!promotionData || !promotionData.hasPromotion) {
+            if (!promotionData?.hasPromotion) {
+                return basePrice;
+            }
+
+            return promotionData.effectivePrice;
+        } catch (error) {
+            // En cas d'indisponibilité du service produit, on utilise le prix de base
+            // pour ne pas bloquer le checkout. L'erreur est loggée pour monitoring.
+            logError(error, { context: 'OrderService.resolveEffectivePrice', variantId });
             return basePrice;
         }
-
-        return promotionData.effectivePrice;
     }
 
     /**
-     * Invalide le cache Redis d'un produit à partir d'un variantId.
+     * Invalide les entrées Redis liées à une variante produit.
      * Fire-and-forget : ne bloque jamais le flux principal.
      */
     async #invalidateVariantCache(variantId) {
         try {
             await cacheService.delete(`stock:variant:${variantId}`);
-
-            const variant = await productsRepo.findVariantById(variantId);
-            if (variant?.productId) {
-                const product = await productsRepo.findById(variant.productId);
-                if (product) {
-                    await cacheService.deleteMany([
-                        `product:details:${product.id}`,
-                        `product:details:${product.slug}`,
-                    ]);
-                }
-            }
         } catch (error) {
             logError(error, { context: 'OrderService.invalidateVariantCache', variantId });
+        }
+    }
+
+    /**
+     * Saga compensatoire : libère le stock réservé pour chaque article d'une liste.
+     * Appelée lors d'un rollback pour annuler les réservations partielles.
+     * Chaque libération est best-effort : une erreur sur un article ne bloque pas les autres.
+     *
+     * @param {Array<{ variantId: string, quantity: number }>} reservedItems
+     */
+    async #compensateReservations(reservedItems) {
+        for (const item of reservedItems) {
+            try {
+                await inventoryClient.release(item.variantId, item.quantity);
+            } catch (error) {
+                // On log et on continue — une libération manquée sera rattrapée par le cron.
+                logError(error, {
+                    context: 'OrderService.compensateReservations',
+                    variantId: item.variantId,
+                    quantity: item.quantity,
+                });
+            }
         }
     }
 
@@ -127,16 +156,16 @@ class OrderService {
     // ─────────────────────────────────────────────────────────────────────
 
     /**
-     * Annule une commande et libère atomiquement tout le stock réservé.
+     * Annule une commande et libère le stock réservé via saga compensatoire.
      *
      * Source de vérité pour toute annulation, qu'elle soit déclenchée par :
      * - L'utilisateur (clic "Annuler" depuis le frontend)
      * - Le webhook Stripe (checkout.session.expired)
      * - Le cron de nettoyage (commandes PENDING expirées)
      *
-     * Garanties :
-     * - Atomicité : si la libération d'un article échoue, tout le bloc est annulé (ROLLBACK)
-     * - Idempotence : si la commande est déjà CANCELLED, aucun effet de bord
+     * Le statut CANCELLED est mis à jour en base dans une transaction atomique.
+     * Les libérations de stock (HTTP) sont best-effort : une erreur est loggée
+     * sans faire échouer l'annulation en base.
      *
      * @param {string} orderId  - UUID de la commande à annuler
      * @param {string} reason   - Motif pour les logs (traçabilité)
@@ -149,11 +178,8 @@ class OrderService {
 
             const items = await ordersRepo.listItems(orderId, client);
 
-            for (const item of items) {
-                await inventoryRepo.release(item.variantId, item.quantity, client);
-                cacheService.delete(`stock:variant:${item.variantId}`).catch(() => { });
-            }
-
+            // On marque d'abord CANCELLED en base pour garantir l'idempotence.
+            // Les libérations HTTP qui échouent seront rattrapées par le cron.
             await client.query(
                 `UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2`,
                 [ORDER_STATUS.CANCELLED, orderId]
@@ -161,10 +187,16 @@ class OrderService {
 
             await client.query('COMMIT');
 
-            logInfo(`[Stock] Stock libéré — orderId: ${orderId}, reason: ${reason}`);
+            logInfo(`[Stock] Commande annulée — orderId: ${orderId}, reason: ${reason}`);
 
-            // Invalidation du cache produit hors transaction (non bloquant).
+            // Libérations HTTP hors transaction — best-effort.
             for (const item of items) {
+                inventoryClient
+                    .release(item.variantId, item.quantity)
+                    .catch((err) =>
+                        logError(err, { context: 'cancelOrderAndReleaseStock.release', orderId, variantId: item.variantId })
+                    );
+
                 this.#invalidateVariantCache(item.variantId).catch(() => { });
             }
 
@@ -244,6 +276,17 @@ class OrderService {
     // CRÉATION & PRÉVISUALISATION
     // ─────────────────────────────────────────────────────────────────────
 
+    /**
+     * Crée une commande à partir des articles du panier.
+     *
+     * SAGA COMPENSATOIRE :
+     * Les réservations de stock sont effectuées via HTTP avant la transaction DB.
+     * Si une réservation échoue (stock insuffisant ou monolith inaccessible),
+     * les réservations déjà effectuées sont libérées avant de propager l'erreur.
+     *
+     * Si la transaction DB échoue après toutes les réservations,
+     * la saga compensatoire libère également tout le stock.
+     */
     async createOrderFromCart(userId = null, checkoutData) {
         const {
             items,
@@ -257,28 +300,38 @@ class OrderService {
             throw new ValidationError('Le panier est vide');
         }
 
-        const client = await pgPool.connect();
+        // Réservations de stock — hors transaction DB (HTTP inter-service)
+        const reservedItems = [];
+        const itemsWithRealPrices = [];
+
         try {
-            await client.query('BEGIN');
-
-            const itemsWithRealPrices = [];
-
             for (const item of items) {
-                const inventoryEntry = await inventoryRepo.reserve(item.variantId, item.quantity, client);
+                // reserve() retourne { price, weight } depuis le monolith
+                const inventoryData = await inventoryClient.reserve(item.variantId, item.quantity);
+                reservedItems.push({ variantId: item.variantId, quantity: item.quantity });
 
                 const effectivePrice = await this.#resolveEffectivePrice(
                     item.variantId,
-                    inventoryEntry.price,
-                    client
+                    inventoryData.price
                 );
 
                 itemsWithRealPrices.push({
                     ...item,
                     price: effectivePrice,
-                    basePrice: inventoryEntry.price,
-                    weight: inventoryEntry.weight || 0.5,
+                    basePrice: inventoryData.price,
+                    weight: inventoryData.weight || 0.5,
                 });
             }
+        } catch (error) {
+            // Saga compensatoire : libère le stock déjà réservé avant de propager l'erreur.
+            await this.#compensateReservations(reservedItems);
+            throw error;
+        }
+
+        // Transaction DB — persistance de la commande
+        const client = await pgPool.connect();
+        try {
+            await client.query('BEGIN');
 
             const totals = this.#calculateTotals(
                 itemsWithRealPrices, shippingCountry, shippingMethod, taxCategory
@@ -314,14 +367,21 @@ class OrderService {
             }
 
             return { ...order, pricing: totals };
+
         } catch (error) {
             await client.query('ROLLBACK');
+            // La DB a échoué après les réservations HTTP : on libère tout le stock.
+            await this.#compensateReservations(reservedItems);
             throw error;
         } finally {
             client.release();
         }
     }
 
+    /**
+     * Prévisualise le total d'une commande sans réserver de stock.
+     * Les items doivent être passés explicitement (le panier appartient au monolith).
+     */
     async previewOrderTotal(userId = null, checkoutData) {
         const {
             items,
@@ -330,25 +390,19 @@ class OrderService {
             taxCategory = 'standard',
         } = checkoutData;
 
-        let cartItems = items;
-        if (userId && !items) {
-            const cart = await cartsRepo.findByUserId(userId);
-            if (!cart) throw new AppError('Panier introuvable', HTTP_STATUS.NOT_FOUND);
-            cartItems = await cartsRepo.listItems(cart.id);
-        }
-        if (!cartItems || cartItems.length === 0) {
+        if (!items || items.length === 0) {
             throw new ValidationError('Le panier est vide');
         }
 
         const itemsWithRealPrices = await Promise.all(
-            cartItems.map(async (item) => {
-                const variant = await inventoryRepo.findByVariantId(item.variantId);
+            items.map(async (item) => {
+                // getVariant() retourne { price, weight } sans toucher au stock
+                const variant = await productClient.getVariant(item.variantId);
                 if (!variant) throw new AppError('Produit introuvable', HTTP_STATUS.NOT_FOUND);
 
                 const effectivePrice = await this.#resolveEffectivePrice(
                     item.variantId,
-                    variant.price,
-                    pgPool
+                    variant.price
                 );
 
                 return { ...item, price: effectivePrice, weight: variant.weight || 0.5 };
@@ -517,7 +571,12 @@ class OrderService {
         if (newStatus === ORDER_STATUS.CANCELLED) {
             const items = await ordersRepo.listItems(orderId);
             for (const item of items) {
-                await inventoryRepo.release(item.variantId, item.quantity);
+                // Release best-effort : une erreur ne bloque pas le changement de statut
+                inventoryClient
+                    .release(item.variantId, item.quantity)
+                    .catch((err) =>
+                        logError(err, { context: 'updateOrderStatus.release', orderId, variantId: item.variantId })
+                    );
                 this.#invalidateVariantCache(item.variantId).catch(() => { });
             }
         }
@@ -525,6 +584,7 @@ class OrderService {
         this.#sendOrderStatusNotification(
             previousStatus, newStatus, updatedOrder.userId, updatedOrder, { shipment: shipmentData }
         );
+
         return updatedOrder;
     }
 
@@ -536,7 +596,9 @@ class OrderService {
         try {
             notificationService
                 .notifyOrderStatusChange(previousStatus, newStatus, userId, order, metadata)
-                .catch((error) => logError(error, { context: 'OrderService.sendOrderStatusNotification', orderId: order.id }));
+                .catch((error) =>
+                    logError(error, { context: 'OrderService.sendOrderStatusNotification', orderId: order.id })
+                );
         } catch (error) {
             logError(error, { context: 'OrderService.sendOrderStatusNotification', orderId: order.id });
         }

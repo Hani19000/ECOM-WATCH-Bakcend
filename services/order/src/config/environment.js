@@ -2,10 +2,10 @@
  * @module Config/Environment
  *
  * Point d'entrée unique pour toutes les variables d'environnement
- * de l'auth-service.
+ * de l'order-service.
  *
- * Centraliser ici permet de détecter les variables manquantes au démarrage
- * plutôt qu'à l'exécution d'une requête, et d'éviter les process.env éparpillés.
+ * Centraliser ici détecte les variables manquantes au démarrage (fail-fast)
+ * plutôt qu'à l'exécution d'une requête.
  */
 import 'dotenv/config';
 
@@ -13,21 +13,20 @@ import 'dotenv/config';
 
 const requiredEnv = [
     'PORT',
-    'JWT_ACCESS_SECRET',
-    'JWT_REFRESH_SECRET',
+    'JWT_ACCESS_SECRET',          // Valider les tokens émis par l'auth-service
     'REDIS_URL',
     'CLIENT_URL',
-    'ORDER_SERVICE_URL',
-    'INTERNAL_AUTH_SECRET',
+    'MONOLITH_URL',               // Appels HTTP vers /internal/inventory et /internal/products
+    'INTERNAL_ORDER_SECRET',      // Secret partagé avec le monolith (payment webhook)
+    'INTERNAL_AUTH_SECRET',       // Secret partagé avec l'auth-service (autoClaimGuestOrders)
 ];
 
-// SENTRY_DSN optionnel en dev, obligatoire en prod
+// SENTRY_DSN optionnel en développement, obligatoire en production
 if (process.env.NODE_ENV === 'production') {
     requiredEnv.push('SENTRY_DSN');
 }
 
 // ── Validation PostgreSQL ─────────────────────────────────────────────────────
-// Accepte soit DATABASE_URL (Neon/Cloud), soit les paramètres individuels (local Docker)
 
 const hasPostgresConfig =
     process.env.DATABASE_URL ||
@@ -43,8 +42,8 @@ const missingEnv = requiredEnv.filter((key) => !process.env[key]);
 if (missingEnv.length > 0 || !hasPostgresConfig) {
     const errorMsg =
         missingEnv.length > 0
-            ? `[auth-service] Variables d'environnement manquantes : ${missingEnv.join(', ')}`
-            : '[auth-service] Configuration PostgreSQL manquante (DATABASE_URL ou POSTGRES_*)';
+            ? `[order-service] Variables d'environnement manquantes : ${missingEnv.join(', ')}`
+            : '[order-service] Configuration PostgreSQL manquante (DATABASE_URL ou POSTGRES_*)';
     throw new Error(errorMsg);
 }
 
@@ -54,7 +53,7 @@ const isProduction = process.env.NODE_ENV === 'production';
 
 export const ENV = Object.freeze({
     server: {
-        port: Number(process.env.PORT) || 3002,
+        port: Number(process.env.PORT) || 3004,
         nodeEnv: process.env.NODE_ENV || 'development',
         isProduction,
     },
@@ -69,23 +68,15 @@ export const ENV = Object.freeze({
             database: process.env.POSTGRES_DB,
         },
         redis: {
-            // host: process.env.REDIS_HOST || 'localhost',
-            // port: Number(process.env.REDIS_PORT) || 6379,
-            // password: process.env.REDIS_PASSWORD || undefined,
             url: process.env.REDIS_URL,
         },
     },
 
     jwt: {
+        // Le refresh secret n'est pas nécessaire ici : l'order-service
+        // valide uniquement les access tokens, il n'émet pas de tokens.
         accessTokenSecret: process.env.JWT_ACCESS_SECRET,
         accessTokenExpiry: process.env.JWT_ACCESS_EXPIRY || '15m',
-        refreshTokenSecret: process.env.JWT_REFRESH_SECRET,
-        refreshTokenExpiry: process.env.JWT_REFRESH_EXPIRY || '7d',
-    },
-
-    bcrypt: {
-        iterations: Number(process.env.BCRYPT_ITERATIONS) || 100000,
-        saltLength: Number(process.env.BCRYPT_SALT_LENGTH) || 16,
     },
 
     rateLimit: {
@@ -102,20 +93,34 @@ export const ENV = Object.freeze({
 
     // Communication inter-services
     services: {
-        orderServiceUrl: process.env.ORDER_SERVICE_URL, // utilisé par order.client.js
-        internalSecret: process.env.INTERNAL_AUTH_SECRET,  // header X-Internal-Secret
+        monolithUrl: process.env.MONOLITH_URL,
+        // Timeout en ms pour les appels HTTP vers le monolith.
+        // En dessous, on préfère échouer vite et déclencher la saga compensatoire.
+        httpTimeoutMs: Number(process.env.INTERNAL_HTTP_TIMEOUT_MS) || 5000,
+    },
+
+    // Secrets partagés pour valider les appels inter-services (header X-Internal-Secret)
+    internal: {
+        // Utilisé pour les appels entrants depuis le monolith (payment)
+        orderSecret: process.env.INTERNAL_ORDER_SECRET,
+        // Utilisé pour les appels entrants depuis l'auth-service
+        authSecret: process.env.INTERNAL_AUTH_SECRET,
     },
 
     cors: {
-        origins: process.env.CORS_ORIGINS?.split(',') || ['http://localhost:5173'],
+        origins: process.env.CORS_ORIGINS?.split(',').map((o) => o.trim()) || ['http://localhost:5173'],
     },
 
     clientUrl: process.env.CLIENT_URL || 'http://localhost:5173',
 
-    // Utilisé par email.service.js — ton projet utilise Resend
     email: {
         apiKey: process.env.RESEND_API_KEY,
         fromEmail: process.env.RESEND_FROM_EMAIL || 'noreply@ecom-watch.local',
         fromName: process.env.RESEND_FROM_NAME || 'ECOM-WATCH',
+    },
+
+    // Durée en minutes avant qu'une commande PENDING soit considérée abandonnée
+    orders: {
+        expirationMinutes: Number(process.env.ORDER_EXPIRATION_MINUTES) || 30,
     },
 });

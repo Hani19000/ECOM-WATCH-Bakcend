@@ -11,6 +11,10 @@
  *
  * Ce périmètre est appliqué directement en SQL, pas en application,
  * pour garantir l'immuabilité et éviter les oublis côté service.
+ *
+ * CROSS-SCHEMA :
+ * Les JOINs sur `auth.users` et `product.product_variants` utilisent
+ * le nom de schéma complet car le search_path de ce service est `"order"`.
  */
 import { pgPool } from '../config/database.js';
 import { mapRow, mapRows } from './_mappers.js';
@@ -18,18 +22,15 @@ import { validateUUID } from '../utils/validation.js';
 import crypto from 'crypto';
 
 // ─────────────────────────────────────────────────────────────────────
-// FRAGMENT SQL RÉUTILISABLE — items avec image
+// FRAGMENT SQL RÉUTILISABLE — items enrichis avec l'image courante
 // ─────────────────────────────────────────────────────────────────────
 
 /**
  * Fragment json_build_object commun pour les agrégations d'items.
  *
- * L'image est lue directement depuis pv.attributes pour garantir
- * une URL valide indépendamment de ce qui était stocké dans
- * order_items.variant_attributes au moment du checkout.
- *
- * Le frontend cherche déjà item.image en premier dans sa chaîne de
- * fallback — ce champ était simplement absent jusqu'ici.
+ * L'image est lue directement depuis product.product_variants.attributes
+ * pour garantir une URL valide indépendamment de ce qui était stocké
+ * dans order_items.variant_attributes au moment du checkout.
  */
 const ITEM_JSON_OBJECT = `
     json_build_object(
@@ -102,26 +103,6 @@ export const ordersRepo = {
     return mapRow(rows[0]);
   },
 
-  async createWithItems({ order, items }) {
-    const client = await pgPool.connect();
-    try {
-      await client.query('BEGIN');
-      const createdOrder = await ordersRepo.createOrder(client, order);
-      const createdItems = await Promise.all(
-        items.map((item) =>
-          ordersRepo.addItem(client, { ...item, orderId: createdOrder.id })
-        )
-      );
-      await client.query('COMMIT');
-      return { order: createdOrder, items: createdItems };
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
-  },
-
   // ─────────────────────────────────────────────────────────────────────
   // LECTURE — ACCÈS UNIVERSEL (authentifié ou admin)
   // ─────────────────────────────────────────────────────────────────────
@@ -139,7 +120,6 @@ export const ordersRepo = {
   // LECTURE — ACCÈS PUBLIC GUEST (barrière user_id IS NULL en SQL)
   // ─────────────────────────────────────────────────────────────────────
 
-
   async findGuestOnlyById(id) {
     validateUUID(id, 'orderId');
 
@@ -154,7 +134,7 @@ export const ordersRepo = {
                ) AS items
              FROM orders o
              LEFT JOIN order_items oi ON oi.order_id = o.id
-             LEFT JOIN product_variants pv ON pv.id = oi.variant_id
+             LEFT JOIN product.product_variants pv ON pv.id = oi.variant_id
              WHERE o.id = $1
                AND o.user_id IS NULL
              GROUP BY o.id`,
@@ -166,7 +146,8 @@ export const ordersRepo = {
 
   /**
    * Recherche guest par numéro + email — timing-safe.
-   *
+   * La comparaison d'email est faite en application (après récupération)
+   * pour garantir un temps de réponse constant et éviter les oracle timing.
    */
   async findByOrderNumberAndEmail(orderNumber, email) {
     const orderNumberRegex = /^ORD-\d{4}-\d+$/;
@@ -185,7 +166,7 @@ export const ordersRepo = {
                ) AS items
              FROM orders o
              LEFT JOIN order_items oi ON oi.order_id = o.id
-             LEFT JOIN product_variants pv ON pv.id = oi.variant_id
+             LEFT JOIN product.product_variants pv ON pv.id = oi.variant_id
              WHERE o.order_number = $1
                AND o.user_id IS NULL
              GROUP BY o.id`,
@@ -195,7 +176,6 @@ export const ordersRepo = {
     if (rows.length === 0) return null;
 
     const order = mapRow(rows[0]);
-
     const storedEmail = order.shippingAddress?.email?.trim().toLowerCase();
     if (!storedEmail) return null;
 
@@ -290,14 +270,16 @@ export const ordersRepo = {
   /**
    * Retourne les items d'une commande enrichis de l'image courante de la variante.
    * Accepte un client optionnel pour s'exécuter dans une transaction externe.
+   * Le schéma complet `product.product_variants` est requis car le search_path
+   * de ce service est `"order"`.
    */
   async listItems(orderId, client = pgPool) {
     validateUUID(orderId, 'orderId');
     const { rows } = await client.query(
       `SELECT oi.*, pv.attributes->>'image' AS image
-         FROM order_items oi
-         LEFT JOIN product_variants pv ON pv.id = oi.variant_id
-         WHERE oi.order_id = $1`,
+             FROM order_items oi
+             LEFT JOIN product.product_variants pv ON pv.id = oi.variant_id
+             WHERE oi.order_id = $1`,
       [orderId]
     );
     return mapRows(rows);
@@ -364,29 +346,29 @@ export const ordersRepo = {
     if (search) {
       values.push(`%${search}%`);
       whereClause += ` AND (
-            o.order_number ILIKE $${values.length} OR
-            u.email ILIKE $${values.length} OR
-            o.shipping_address->>'email' ILIKE $${values.length} OR
-            o.shipping_address->>'lastName' ILIKE $${values.length}
-        )`;
+                o.order_number ILIKE $${values.length} OR
+                u.email ILIKE $${values.length} OR
+                o.shipping_address->>'email' ILIKE $${values.length} OR
+                o.shipping_address->>'lastName' ILIKE $${values.length}
+            )`;
     }
 
     const countQuery = `
-        SELECT COUNT(*)
-        FROM orders o
-        LEFT JOIN users u ON o.user_id = u.id
-        ${whereClause}
-    `;
+            SELECT COUNT(*)
+            FROM orders o
+            LEFT JOIN auth.users u ON o.user_id = u.id
+            ${whereClause}
+        `;
     const countValues = [...values];
 
     const query = `
-        SELECT o.*, u.email AS user_email
-        FROM orders o
-        LEFT JOIN users u ON o.user_id = u.id
-        ${whereClause}
-        ORDER BY o.created_at DESC
-        LIMIT $${values.push(limit)} OFFSET $${values.push(offset)}
-    `;
+            SELECT o.*, u.email AS user_email
+            FROM orders o
+            LEFT JOIN auth.users u ON o.user_id = u.id
+            ${whereClause}
+            ORDER BY o.created_at DESC
+            LIMIT $${values.push(limit)} OFFSET $${values.push(offset)}
+        `;
 
     const [dataResult, countResult] = await Promise.all([
       pgPool.query(query, values),
@@ -397,33 +379,17 @@ export const ordersRepo = {
 
     return {
       orders: mapRows(dataResult.rows),
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit),
-      },
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
     };
-  },
-
-  async findExpiredPendingOrders(expirationMinutes = 30) {
-    const { rows } = await pgPool.query(
-      `SELECT id
-             FROM orders
-             WHERE status = 'PENDING'
-               AND created_at < NOW() - (INTERVAL '1 minute' * $1)`,
-      [expirationMinutes]
-    );
-    return rows;
   },
 
   async getGlobalStats(client = pgPool) {
     const { rows } = await client.query(
       `SELECT
-         COUNT(*)                        AS count,
-         COALESCE(SUM(total_amount), 0)  AS "totalAmount"
-       FROM orders
-       WHERE status != 'CANCELLED'`
+               COUNT(*)                        AS count,
+               COALESCE(SUM(total_amount), 0)  AS "totalAmount"
+             FROM orders
+             WHERE status != 'CANCELLED'`
     );
     return {
       count: parseInt(rows[0].count, 10),
@@ -434,13 +400,13 @@ export const ordersRepo = {
   async getDailySalesHistory(days = 30) {
     const { rows } = await pgPool.query(
       `SELECT
-             DATE(created_at)               AS date,
-             COALESCE(SUM(total_amount), 0) AS revenue
-         FROM orders
-         WHERE status NOT IN ('CANCELLED', 'PENDING')
-           AND created_at >= NOW() - ($1 || ' days')::INTERVAL
-         GROUP BY DATE(created_at)
-         ORDER BY date ASC`,
+               DATE(created_at)               AS date,
+               COALESCE(SUM(total_amount), 0) AS revenue
+             FROM orders
+             WHERE status NOT IN ('CANCELLED', 'PENDING')
+               AND created_at >= NOW() - ($1 || ' days')::INTERVAL
+             GROUP BY DATE(created_at)
+             ORDER BY date ASC`,
       [days]
     );
     return rows;
