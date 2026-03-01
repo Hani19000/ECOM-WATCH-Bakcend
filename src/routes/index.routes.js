@@ -1,16 +1,13 @@
 /**
  * @module Routes/Index
  *
- * Point d'entrée du routeur v1 du monolith.
- * Ne contient QUE les routes publiques et authentifiées sous /api/v1/*.
+ * Point d'entrée unique du routeur monolith.
  *
- * Les routes /internal/* sont montées directement sur l'app Express
- * dans src/app.js (app.use('/internal', internalRoutes)) pour que
- * l'order-service puisse les appeler via ${MONOLITH_URL}/internal/...
- * sans le préfixe /api/v1.
+ * Deux périmètres distincts :
+ * - /api/v1/*   → routes publiques/auth (rate limiter général)
+ * - /internal/* → routes inter-services (pas de rate limiter, protégées par X-Internal-Secret)
  *
- * Ces routes ne passent pas par le Gateway Nginx (bloquées en amont :
- *   location ~ ^/internal/ { return 404; }
+ * Les routes /internal ne passent pas par le Gateway Nginx (bloquées en amont)
  * et ne sont accessibles qu'en réseau interne Render (service-to-service).
  */
 import { Router } from 'express';
@@ -28,13 +25,16 @@ import inventoryRoutes from './inventory.routes.js';
 import taxRoutes from './tax.routes.js';
 import adminRoutes from './admin.routes.js';
 import sitemapRoutes from './sitemap.routes.js';
+import internalRoutes from './internal.routes.js';
 
 const router = Router();
 
 // ─────────────────────────────────────────────────────────────────────
 // ROUTES PUBLIQUES ET AUTHENTIFIÉES
-// Le préfixe /api/v1 est déjà ajouté par app.use('/api/v1', v1Router)
-// dans app.js — ne pas le répéter ici.
+//
+// Ce router est monté sous /api/v1 dans app.js (app.use('/api/v1', router)).
+// Les chemins ici sont RELATIFS à ce préfixe — ne pas le répéter.
+// Ex : router.use('/products') → accessible à /api/v1/products
 // ─────────────────────────────────────────────────────────────────────
 
 router.use(generalLimiter);
@@ -52,5 +52,13 @@ router.use('/inventory', inventoryRoutes);
 router.use('/taxes', taxRoutes);
 router.use('/admin', adminRoutes);
 router.use('/', sitemapRoutes);
+
+// ─────────────────────────────────────────────────────────────────────
+// ROUTES INTER-SERVICES (sans rate limiter, protégées par X-Internal-Secret)
+// Appelées uniquement par l'order-service — jamais exposées via Gateway.
+// Accessible à /api/v1/internal/... depuis les autres services.
+// ─────────────────────────────────────────────────────────────────────
+
+router.use('/internal', internalRoutes);
 
 export default router;
