@@ -5,7 +5,7 @@
  * Fréquence : tous les jours à 3h30.
  */
 import { pgPool } from '../config/database.js';
-import { logInfo, logError } from '../../utils/logger.js';
+import { logInfo, logError } from '../utils/logger.js';
 
 export const ordersCleanupJob = {
     name: 'orders-cleanup',
