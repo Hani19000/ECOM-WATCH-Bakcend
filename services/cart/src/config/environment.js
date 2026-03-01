@@ -4,13 +4,16 @@
  * Source unique de vérité pour les variables d'environnement du cart-service.
  *
  * STRATÉGIE DE VALIDATION :
- * - En production / développement : fail-fast via process.exit(1) si une variable
- *   critique est manquante. Le service ne démarre pas et l'erreur est immédiatement visible.
- * - En test (NODE_ENV === 'test') : on lève une Error au lieu d'appeler process.exit.
- *   Cela permet à Vitest de capturer l'erreur proprement sans tuer le processus runner
- *   et sans faire échouer toute la suite de tests à cause d'un module mal initialisé.
+ * - En production/développement : fail-fast au démarrage (process.exit) si une
+ *   variable critique est manquante. Le service ne démarre pas.
+ * - En test (NODE_ENV === 'test') : la validation est sautée entièrement.
+ *   Toutes les dépendances (DB, Redis, product-service) sont mockées via vi.mock()
+ *   dans les tests — les valeurs réelles ne sont jamais appelées. Valider ici
+ *   casserait le chargement du module avant que Vitest ne puisse appliquer ses mocks.
  */
 import 'dotenv/config';
+
+const isTestEnv = process.env.NODE_ENV === 'test';
 
 const requiredEnv = [
     'PORT',
@@ -25,19 +28,17 @@ if (process.env.NODE_ENV === 'production') {
     requiredEnv.push('SENTRY_DSN');
 }
 
-const missing = requiredEnv.filter((key) => !process.env[key]);
+// La validation fail-fast est désactivée en test : les dépendances sont toutes
+// mockées et les valeurs réelles des variables ne sont jamais utilisées.
+if (!isTestEnv) {
+    const missing = requiredEnv.filter((key) => !process.env[key]);
 
-if (missing.length > 0) {
-    const message = `[FATAL] [cart-service] Variables d'environnement manquantes : ${missing.join(', ')}`;
-
-    // En mode test, process.exit tuerait le runner Vitest et ferait échouer
-    // toutes les suites de test en cours — on lève une Error à la place.
-    if (process.env.NODE_ENV === 'test') {
-        throw new Error(message);
+    if (missing.length > 0) {
+        console.error(
+            `[FATAL] [cart-service] Variables d'environnement manquantes : ${missing.join(', ')}`
+        );
+        process.exit(1);
     }
-
-    console.error(message);
-    process.exit(1);
 }
 
 const isProduction = process.env.NODE_ENV === 'production';
@@ -51,27 +52,31 @@ export const ENV = Object.freeze({
 
     database: {
         postgres: {
-            url: process.env.DATABASE_URL,
+            // Fallback utilisé uniquement en test — jamais appelé car pg est mocké
+            url: process.env.DATABASE_URL ?? 'postgresql://test:test@localhost:5432/test',
         },
         redis: {
-            url: process.env.REDIS_URL,
+            // Fallback utilisé uniquement en test — jamais appelé car redis est mocké
+            url: process.env.REDIS_URL ?? 'redis://localhost:6379',
         },
     },
 
     jwt: {
         // Le cart-service valide les tokens, il n'en émet pas.
-        accessTokenSecret: process.env.JWT_ACCESS_SECRET,
+        accessTokenSecret: process.env.JWT_ACCESS_SECRET ?? 'test-secret',
     },
 
     // Communication vers le product-service
     services: {
-        productServiceUrl: process.env.PRODUCT_SERVICE_URL,
+        // Fallback utilisé uniquement en test — jamais appelé car productClient est mocké
+        productServiceUrl: process.env.PRODUCT_SERVICE_URL ?? 'http://localhost:3003',
         httpTimeoutMs: Number(process.env.INTERNAL_HTTP_TIMEOUT_MS) || 5000,
     },
 
     // Secret partagé avec le product-service pour les appels /internal/*
     internal: {
-        productSecret: process.env.INTERNAL_PRODUCT_SECRET,
+        // Fallback utilisé uniquement en test — jamais appelé car productClient est mocké
+        productSecret: process.env.INTERNAL_PRODUCT_SECRET ?? 'test-secret',
     },
 
     rateLimit: {

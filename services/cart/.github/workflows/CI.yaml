@@ -5,15 +5,11 @@
 #
 # Pipeline :
 #   lint   -- vérification statique ESLint
-#   test   -- tests d'intégration avec PostgreSQL 15 et Redis 7 en services locaux
+#   test   -- tests unitaires (mocks complets, pas de vraie DB pour le cart)
+#             + tests d'intégration monolith avec PostgreSQL 15 et Redis 7
 #   build  -- vérification que l'image Docker se construit sans erreur
 #
 # "test" et "build" ne démarrent que si "lint" réussit.
-#
-# Note infrastructure :
-#   Les tests utilisent des services Docker locaux au runner (PostgreSQL + Redis)
-#   et non les services de production (Neon + Render Redis). Cela garantit
-#   l'isolation totale des tests vis-à-vis de la base de production.
 # =============================================================================
 
 name: CI
@@ -29,7 +25,7 @@ on:
       - develop
 
 # Annule les runs en cours si un nouveau commit arrive sur la même branche.
-# Evite de consommer des minutes de CI sur du code déjà remplacé.
+# Évite de consommer des minutes de CI sur du code déjà remplacé.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -57,24 +53,24 @@ jobs:
       - name: Installation des dépendances
         run: npm ci
 
-      # La commande "lint" doit être définie dans package.json.
-      # Exemple : "lint": "eslint src/ --ext .js"
       - name: ESLint
         run: npm run lint
 
 
   # ---------------------------------------------------------------------------
-  # JOB 2 : TESTS D'INTEGRATION
+  # JOB 2 : TESTS
   #
   # Démarre PostgreSQL 15-alpine et Redis 7-alpine comme services Docker
-  # natifs du runner. Ils sont disponibles sur localhost avant le premier step.
+  # natifs du runner pour les tests d'intégration du monolith.
   #
-  # Le schéma est appliqué manuellement dans l'ordre correct :
-  #   1. init-postgres.sql                   -- schéma, types, triggers, seed
-  #   2. 002_production_optimizations.sql    -- index, vues, fonctions, password_history
+  # Les tests du cart-service sont unitaires (mocks complets) : ils n'ont
+  # pas besoin de vraie DB. Mais environment.js du cart-service exige que
+  # certaines variables soient définies dans process.env au moment du
+  # chargement du module (même si elles ne sont jamais utilisées en test).
+  # Ces variables sont déclarées ici pour satisfaire cette contrainte.
   # ---------------------------------------------------------------------------
   test:
-    name: Tests d'intégration
+    name: Tests
     runs-on: ubuntu-latest
 
     services:
@@ -103,63 +99,50 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
-    # Variables consommées par environment.js (validation fail-fast au démarrage).
-    # Les valeurs sensibles sont fictives -- elles n'ont aucun impact hors des tests.
     env:
       NODE_ENV: test
 
-      # Base de données locale du runner
+      # ── Monolith (PostgreSQL + variables applicatives) ──────────────────────
       POSTGRES_HOST: localhost
       POSTGRES_PORT: 5432
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: ecom_watch_test
 
-      # Redis local du runner
       REDIS_HOST: localhost
       REDIS_PORT: 6379
 
-      # JWT -- valeurs de test uniquement, jamais utilisées en production
       JWT_ACCESS_SECRET: ci-access-secret-not-for-production
       JWT_REFRESH_SECRET: ci-refresh-secret-not-for-production
       JWT_ACCESS_EXPIRES_IN: 15m
       JWT_REFRESH_EXPIRES_IN: 7d
 
-      # Stripe -- clé test sans impact financier
       STRIPE_SECRET_KEY: sk_test_placeholder
       STRIPE_WEBHOOK_SECRET: whsec_placeholder
 
-      # Cloudinary -- désactivé en test
       CLOUDINARY_CLOUD_NAME: test
       CLOUDINARY_API_KEY: test
       CLOUDINARY_API_SECRET: test
 
-      # Email Resend -- désactivé en test
       RESEND_API_KEY: re_test_placeholder
       EMAIL_FROM: noreply@ecom-watch.local
 
-      # Application
       CLIENT_URL: http://localhost:3000
       PORT: 3001
 
-      # Sentry -- valeur fictive pour passer la validation
       SENTRY_DSN: https://public@sentry.example.com/1
 
       # ── cart-service ────────────────────────────────────────────────────────
-      # Ces variables sont requises par services/cart/src/config/environment.js.
-      # Vitest est lancé depuis la racine du monorepo : c'est le bloc env du job
-      # racine qui s'applique à tous les fichiers de test, y compris ceux des
-      # sous-services. Le vitest.config.js de services/cart/ n'est PAS lu
-      # lorsque vitest est invoqué depuis la racine.
+      # Requises par services/cart/src/config/environment.js au chargement du
+      # module. Vitest est lancé depuis la racine du monorepo : le vitest.config.js
+      # de services/cart/ n'est PAS lu dans ce contexte — seul ce bloc env s'applique.
       #
-      # DATABASE_URL et REDIS_URL pointent vers les services Docker du runner.
-      # PRODUCT_SERVICE_URL et INTERNAL_PRODUCT_SECRET sont des stubs : les
-      # tests du cart-service mockent toutes les dépendances HTTP via vi.mock.
+      # Les tests cart-service mockent toutes les dépendances via vi.mock() :
+      # ces valeurs ne déclenchent aucun appel réel à la DB ou au product-service.
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/ecom_watch_test
       REDIS_URL: redis://localhost:6379
       PRODUCT_SERVICE_URL: http://localhost:3003
       INTERNAL_PRODUCT_SECRET: ci-cart-internal-secret-not-for-production
-
 
     steps:
       - name: Checkout
@@ -174,7 +157,6 @@ jobs:
       - name: Installation des dépendances
         run: npm ci
 
-      # Applique le schéma complet : tables, enums, triggers, données de test.
       - name: Initialisation du schéma
         run: |
           PGPASSWORD=postgres psql \
@@ -183,8 +165,6 @@ jobs:
             -d ecom_watch_test \
             -f init-postgres.sql
 
-      # Applique les optimisations : index, vues matérialisées, fonctions
-      # d'archivage, password_history et password_reset_tokens.
       - name: Application de la migration 002
         run: |
           PGPASSWORD=postgres psql \
@@ -196,7 +176,6 @@ jobs:
       - name: Exécution des tests
         run: npm test
 
-      # Upload du rapport de couverture. Non bloquant si CODECOV_TOKEN est absent.
       - name: Upload couverture Codecov
         uses: codecov/codecov-action@v4
         if: always()
@@ -208,8 +187,7 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # JOB 3 : BUILD DOCKER
-  # L'image n'est pas publiée ici -- Render construit lui-même depuis GitHub.
-  # Ce job détecte les erreurs de Dockerfile avant qu'elles atteignent Render.
+  # Détecte les erreurs de Dockerfile avant qu'elles atteignent Render.
   # ---------------------------------------------------------------------------
   build:
     name: Build Docker
@@ -228,6 +206,5 @@ jobs:
           context: .
           file: docker/Dockerfile
           push: false
-          # Cache des layers entre les runs pour réduire la durée de vérification
           cache-from: type=gha
           cache-to: type=gha,mode=max
