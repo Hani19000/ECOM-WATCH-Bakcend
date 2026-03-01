@@ -100,7 +100,13 @@ class PaymentController {
 
     /**
      * Page de succès après paiement (retour Stripe).
-     * Le session_id est validé avant injection dans le HTML pour prévenir le XSS.
+     *
+     * Redirection via <meta http-equiv="refresh"> plutôt qu'un script inline.
+     * Un script inline serait bloqué par la CSP (script-src 'self') sans unsafe-inline
+     * ni hash explicite — et assouplir la CSP uniquement pour cette page
+     * affaiblirait l'ensemble du service.
+     *
+     * Le session_id est validé avant injection dans le HTML (prévention XSS).
      */
     handleSuccess = asyncHandler(async (req, res) => {
         const { session_id } = req.query;
@@ -114,6 +120,7 @@ class PaymentController {
             <head>
                 <meta charset="UTF-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <meta http-equiv="refresh" content="2; url=${redirectUrl}">
                 <title>Paiement réussi - ECOM WATCH</title>
                 <style>
                     body { font-family: sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; background: #fdfbf7; }
@@ -130,9 +137,6 @@ class PaymentController {
                     <p>Votre commande est confirmée. Redirection en cours...</p>
                     <div class="loader"></div>
                 </div>
-                <script>
-                    setTimeout(() => { window.location.href = '${redirectUrl}'; }, 2000);
-                </script>
             </body>
             </html>
         `);
