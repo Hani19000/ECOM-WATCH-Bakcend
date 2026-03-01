@@ -2,8 +2,13 @@
  * @module Config/Environment
  *
  * Source unique de vérité pour les variables d'environnement du cart-service.
- * Validation fail-fast au démarrage — le service ne démarre pas si une variable
- * critique est manquante, évitant des erreurs silencieuses en production.
+ *
+ * STRATÉGIE DE VALIDATION :
+ * - En production / développement : fail-fast via process.exit(1) si une variable
+ *   critique est manquante. Le service ne démarre pas et l'erreur est immédiatement visible.
+ * - En test (NODE_ENV === 'test') : on lève une Error au lieu d'appeler process.exit.
+ *   Cela permet à Vitest de capturer l'erreur proprement sans tuer le processus runner
+ *   et sans faire échouer toute la suite de tests à cause d'un module mal initialisé.
  */
 import 'dotenv/config';
 
@@ -23,7 +28,15 @@ if (process.env.NODE_ENV === 'production') {
 const missing = requiredEnv.filter((key) => !process.env[key]);
 
 if (missing.length > 0) {
-    console.error(`[FATAL] [cart-service] Variables d'environnement manquantes : ${missing.join(', ')}`);
+    const message = `[FATAL] [cart-service] Variables d'environnement manquantes : ${missing.join(', ')}`;
+
+    // En mode test, process.exit tuerait le runner Vitest et ferait échouer
+    // toutes les suites de test en cours — on lève une Error à la place.
+    if (process.env.NODE_ENV === 'test') {
+        throw new Error(message);
+    }
+
+    console.error(message);
     process.exit(1);
 }
 
