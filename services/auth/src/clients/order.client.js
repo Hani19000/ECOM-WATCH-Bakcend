@@ -159,11 +159,12 @@ async function getOrderHistory(userId, { page = 1, limit = 10, status } = {}) {
             return { orders: [], pagination: {} };
         }
 
-        const data = await response.json();
+        const body = await response.json();
 
+        // L'order-service enveloppe toujours la réponse dans { status, data: { orders, pagination } }
         return {
-            orders: data.orders ?? [],
-            pagination: data.pagination ?? {},
+            orders: body?.data?.orders ?? [],
+            pagination: body?.data?.pagination ?? {},
         };
 
     } catch (error) {
@@ -207,7 +208,9 @@ async function getUserStats(userId) {
             return null;
         }
 
-        return await response.json();
+        // L'order-service répond { status, data: { stats: {...} } }
+        const body = await response.json();
+        return body?.data?.stats ?? null;
 
     } catch (error) {
         const isTimeout = error.name === 'AbortError';
