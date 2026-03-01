@@ -6,8 +6,8 @@
  */
 import { Router } from 'express';
 import { promotionController } from '../controllers/promotions.controller.js';
-import { protect } from '../middlewares/auth.middleware.js';
-import { restrictTo } from '../middlewares/role.middleware.js';
+import { protect } from '../middleware/auth.middleware.js';
+import { restrictTo } from '../middleware/role.middleware.js';
 import { validateUUID, validateRequired } from '../utils/validation.js';
 
 const router = Router();
