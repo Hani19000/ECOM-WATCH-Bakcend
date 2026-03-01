@@ -11,7 +11,7 @@
 #   Le job validate simule exactement ce que fait entrypoint.sh
 #   en production : envsubst sur nginx.conf + default.conf avec
 #   toutes les variables d'environnement connues, puis nginx -t.
-#   Ajouter un service ici = ajouter sa variable dans ce test.
+#   RÈGLE : ajouter un service ici = ajouter sa variable ici ET dans entrypoint.sh.
 # ================================================================
 
 name: CI — Gateway
@@ -44,8 +44,6 @@ jobs:
   #   - Une variable manquante dans envsubst (upstream vide → emerg)
   #   - Une faute de syntaxe Nginx
   #   - Un bloc location mal formé
-  #
-  # RÈGLE : chaque nouveau service doit être ajouté ici ET dans entrypoint.sh.
   # ────────────────────────────────────────────────────────────────────────────
 
   validate:
@@ -65,6 +63,7 @@ jobs:
             -e ORDER_SERVICE_HOST=ecom-watch-order.onrender.com \
             -e PRODUCT_SERVICE_HOST=ecom-watch-product.onrender.com \
             -e PAYMENT_SERVICE_HOST=ecom-watch-payment.onrender.com \
+            -e CART_SERVICE_HOST=ecom-watch-cart.onrender.com \
             -e FRONTEND_DOMAIN=ecomwatch.vercel.app \
             nginx:1.25-alpine sh -c '
               set -e
@@ -72,10 +71,10 @@ jobs:
               mkdir -p /tmp/nginx/conf.d
 
               # Simulation exacte de entrypoint.sh
-              envsubst "\${PORT} \${MONOLITH_URL} \${AUTH_SERVICE_HOST} \${ORDER_SERVICE_HOST} \${PRODUCT_SERVICE_HOST} \${PAYMENT_SERVICE_HOST} \${FRONTEND_DOMAIN}" \
+              envsubst "${PORT} ${MONOLITH_URL} ${AUTH_SERVICE_HOST} ${ORDER_SERVICE_HOST} ${PRODUCT_SERVICE_HOST} ${PAYMENT_SERVICE_HOST} ${CART_SERVICE_HOST} ${FRONTEND_DOMAIN}" \
                 < /etc/nginx/src/nginx.conf > /tmp/nginx/nginx.conf
 
-              envsubst "\${PORT} \${MONOLITH_URL} \${AUTH_SERVICE_HOST} \${ORDER_SERVICE_HOST} \${PRODUCT_SERVICE_HOST} \${PAYMENT_SERVICE_HOST} \${FRONTEND_DOMAIN}" \
+              envsubst "${PORT} ${MONOLITH_URL} ${AUTH_SERVICE_HOST} ${ORDER_SERVICE_HOST} ${PRODUCT_SERVICE_HOST} ${PAYMENT_SERVICE_HOST} ${CART_SERVICE_HOST} ${FRONTEND_DOMAIN}" \
                 < /etc/nginx/src/conf.d/default.conf > /tmp/nginx/conf.d/default.conf
 
               cp /etc/nginx/src/conf.d/proxy_params.conf /tmp/nginx/conf.d/proxy_params.conf
@@ -92,8 +91,6 @@ jobs:
 
   # ────────────────────────────────────────────────────────────────────────────
   # JOB 2 — BUILD DOCKER IMAGE
-  # Valide que l image se construit sans erreur.
-  # push: false → aucun push vers un registry (CI only).
   # ────────────────────────────────────────────────────────────────────────────
 
   build:
