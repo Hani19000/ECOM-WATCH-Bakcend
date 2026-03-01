@@ -12,8 +12,8 @@
  */
 import { Router } from 'express';
 import { inventoryController } from '../controllers/inventory.controller.js';
-import { protect } from '../middlewares/auth.middleware.js';
-import { restrictTo } from '../middlewares/role.middleware.js';
+import { protect } from '../middleware/auth.middleware.js';
+import { restrictTo } from '../middleware/role.middleware.js';
 
 const router = Router();
 
