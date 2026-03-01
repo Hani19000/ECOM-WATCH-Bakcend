@@ -4,7 +4,7 @@
  * Gère les frais de port avec calcul basé sur le poids, la zone et le type de service.
  * Intègre les adresses de livraison et le suivi des expéditions.
  */
-import { shipmentsRepo, ordersRepo, addressesRepo } from '../repositories/index.js';
+import { shipmentsRepo, ordersRepo } from '../repositories/index.js';
 import { cacheService } from './cache.service.js';
 import { AppError, ValidationError, BusinessError } from '../utils/appError.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
@@ -149,26 +149,26 @@ class ShippingService {
 
     // === GESTION DES ADRESSES ===
 
-    async getUserAddresses(userId) {
-        const cacheKey = `user:${userId}:addresses`;
-        const cached = await cacheService.get(cacheKey);
-        if (cached) return cached;
+    // async getUserAddresses(userId) {
+    //     const cacheKey = `user:${userId}:addresses`;
+    //     const cached = await cacheService.get(cacheKey);
+    //     if (cached) return cached;
 
-        const addresses = await addressesRepo.findByUserId(userId);
-        await cacheService.set(cacheKey, addresses, 1800);
-        return addresses;
-    }
+    //     const addresses = await addressesRepo.findByUserId(userId);
+    //     await cacheService.set(cacheKey, addresses, 1800);
+    //     return addresses;
+    // }
 
-    async createAddress(userId, addressData) {
-        const address = await addressesRepo.create(userId, addressData);
-        await cacheService.delete(`user:${userId}:addresses`);
-        return address;
-    }
+    // async createAddress(userId, addressData) {
+    //     const address = await addressesRepo.create(userId, addressData);
+    //     await cacheService.delete(`user:${userId}:addresses`);
+    //     return address;
+    // }
 
-    async deleteAddress(userId, addressId) {
-        const deleted = await addressesRepo.delete(userId, addressId);
-        if (!deleted) throw new AppError('Adresse non trouvée', HTTP_STATUS.NOT_FOUND);
-    }
+    // async deleteAddress(userId, addressId) {
+    //     const deleted = await addressesRepo.delete(userId, addressId);
+    //     if (!deleted) throw new AppError('Adresse non trouvée', HTTP_STATUS.NOT_FOUND);
+    // }
 
     // === GESTION DES EXPÉDITIONS ===
 
