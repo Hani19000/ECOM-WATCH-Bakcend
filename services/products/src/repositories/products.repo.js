@@ -7,7 +7,7 @@
  */
 import { pgPool } from '../config/database.js';
 import { mapRow, mapRows } from './_mappers.js';
-import { PRODUCT_STATUS, isValidEnum } from '../constants/product.js';
+import { PRODUCT_STATUS, isValidEnum } from '../constants/productStatus.js';
 import { validateRequired, validateSlug } from '../utils/validation.js';
 import { NotFoundError } from '../utils/appError.js';
 
