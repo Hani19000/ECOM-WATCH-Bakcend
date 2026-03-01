@@ -10,8 +10,8 @@
  */
 import { Router } from 'express';
 import { productController } from '../controllers/product.controller.js';
-import { protect } from '../middlewares/auth.middleware.js';
-import { restrictTo } from '../middlewares/role.middleware.js';
+import { protect } from '../middleware/auth.middleware.js';
+import { restrictTo } from '../middleware/role.middleware.js';
 import { validateUUID, validateRequired } from '../utils/validation.js';
 import { ValidationError } from '../utils/appError.js';
 import { uploadCloud } from '../config/cloudinary.js';
