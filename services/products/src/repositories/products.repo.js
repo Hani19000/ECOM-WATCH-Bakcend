@@ -7,9 +7,9 @@
  */
 import { pgPool } from '../config/database.js';
 import { mapRow, mapRows } from './_mappers.js';
-import { PRODUCT_STATUS, isValidEnum } from '../constants/enums.js';
+import { PRODUCT_STATUS, isValidEnum } from '../constants/product.js';
 import { validateRequired, validateSlug } from '../utils/validation.js';
-import { NotFoundError, assertExists } from '../utils/appError.js';
+import { NotFoundError } from '../utils/appError.js';
 
 export const productsRepo = {
   async create({ name, slug, description, status = PRODUCT_STATUS.DRAFT }, client = pgPool) {

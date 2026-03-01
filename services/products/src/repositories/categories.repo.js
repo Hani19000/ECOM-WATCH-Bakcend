@@ -6,10 +6,10 @@
  * Note : La colonne 'parent_category_id' a été retirée car elle ne figure pas
  * dans le schéma de base actuel pour éviter les erreurs SQL 42703.
  */
-import { pgPool } from '../src/config/database.js';
+import { pgPool } from '../config/database.js';
 import { mapRow, mapRows } from './_mappers.js';
-import { validateUUID } from '../src/utils/validation.js';
-import { logError } from '../src/utils/logger.js';
+import { validateUUID } from '../utils/validation.js';
+import { logError } from '../utils/logger.js';
 
 export const categoriesRepo = {
   /**
