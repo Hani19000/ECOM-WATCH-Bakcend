@@ -44,6 +44,8 @@ jobs:
   #   - Une variable manquante dans envsubst (upstream vide → emerg)
   #   - Une faute de syntaxe Nginx
   #   - Un bloc location mal formé
+  #
+  # RÈGLE : chaque nouveau service doit être ajouté ici ET dans entrypoint.sh.
   # ────────────────────────────────────────────────────────────────────────────
 
   validate:
@@ -62,6 +64,7 @@ jobs:
             -e AUTH_SERVICE_HOST=ecom-watch-auth.onrender.com \
             -e ORDER_SERVICE_HOST=ecom-watch-order.onrender.com \
             -e PRODUCT_SERVICE_HOST=ecom-watch-product.onrender.com \
+            -e PAYMENT_SERVICE_HOST=ecom-watch-payment.onrender.com \
             -e FRONTEND_DOMAIN=ecomwatch.vercel.app \
             nginx:1.25-alpine sh -c '
               set -e
@@ -69,10 +72,10 @@ jobs:
               mkdir -p /tmp/nginx/conf.d
 
               # Simulation exacte de entrypoint.sh
-              envsubst "\${PORT} \${MONOLITH_URL} \${AUTH_SERVICE_HOST} \${ORDER_SERVICE_HOST} \${PRODUCT_SERVICE_HOST} \${FRONTEND_DOMAIN}" \
+              envsubst "\${PORT} \${MONOLITH_URL} \${AUTH_SERVICE_HOST} \${ORDER_SERVICE_HOST} \${PRODUCT_SERVICE_HOST} \${PAYMENT_SERVICE_HOST} \${FRONTEND_DOMAIN}" \
                 < /etc/nginx/src/nginx.conf > /tmp/nginx/nginx.conf
 
-              envsubst "\${PORT} \${MONOLITH_URL} \${AUTH_SERVICE_HOST} \${ORDER_SERVICE_HOST} \${PRODUCT_SERVICE_HOST} \${FRONTEND_DOMAIN}" \
+              envsubst "\${PORT} \${MONOLITH_URL} \${AUTH_SERVICE_HOST} \${ORDER_SERVICE_HOST} \${PRODUCT_SERVICE_HOST} \${PAYMENT_SERVICE_HOST} \${FRONTEND_DOMAIN}" \
                 < /etc/nginx/src/conf.d/default.conf > /tmp/nginx/conf.d/default.conf
 
               cp /etc/nginx/src/conf.d/proxy_params.conf /tmp/nginx/conf.d/proxy_params.conf
