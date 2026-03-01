@@ -5,14 +5,15 @@ echo "ECOM-WATCH Gateway démarrage..."
 echo "PORT           = ${PORT}"
 echo "MONOLITH       = ${MONOLITH_URL}"
 echo "AUTH_SERVICE   = ${AUTH_SERVICE_HOST}"
+echo "ORDER_SERVICE  = ${ORDER_SERVICE_HOST}"
 echo "FRONTEND       = ${FRONTEND_DOMAIN}"
 
 mkdir -p /tmp/nginx/conf.d
 
-envsubst '${PORT} ${MONOLITH_URL} ${AUTH_SERVICE_HOST} ${FRONTEND_DOMAIN}' \
+envsubst '${PORT} ${MONOLITH_URL} ${AUTH_SERVICE_HOST} ${ORDER_SERVICE_HOST} ${FRONTEND_DOMAIN}' \
   < /etc/nginx/nginx.conf > /tmp/nginx/nginx.conf
 
-envsubst '${PORT} ${MONOLITH_URL} ${AUTH_SERVICE_HOST} ${FRONTEND_DOMAIN}' \
+envsubst '${PORT} ${MONOLITH_URL} ${AUTH_SERVICE_HOST} ${ORDER_SERVICE_HOST} ${FRONTEND_DOMAIN}' \
   < /etc/nginx/conf.d/default.conf > /tmp/nginx/conf.d/default.conf
 
 cp /etc/nginx/conf.d/proxy_params.conf /tmp/nginx/conf.d/proxy_params.conf
