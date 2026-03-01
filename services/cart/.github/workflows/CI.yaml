@@ -1,0 +1,126 @@
+# =============================================================================
+# WORKFLOW : Intégration Continue (CI) — cart-service
+#
+# Déclenché sur chaque push et pull request vers main et develop
+# UNIQUEMENT si des fichiers du cart-service ou du workflow lui-même sont modifiés.
+# Le filtre `paths` évite de relancer la CI complète pour des changements sans impact.
+#
+# Pipeline :
+#   test   -- tests unitaires du cart-service avec Vitest (mocks complets, pas de DB réelle)
+#   build  -- vérification que l'image Docker du cart-service se construit sans erreur
+#
+# Architecture de test :
+#   Les tests unitaires mockent toutes les dépendances externes (PostgreSQL, Redis,
+#   product-service). Aucun service Docker n'est nécessaire — les tests sont rapides
+#   et isolés. L'intégration avec la base est couverte par le schéma SQL et les
+#   tests du monolith.
+# =============================================================================
+
+name: CI — cart-service
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'services/cart/**'
+      - '.github/workflows/cart-CI.yaml'
+
+  pull_request:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'services/cart/**'
+      - '.github/workflows/cart-CI.yaml'
+
+# Annule les runs en cours si un nouveau commit arrive sur la même branche/PR.
+# Évite de consommer des minutes CI sur du code déjà remplacé.
+concurrency:
+  group: cart-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  # ---------------------------------------------------------------------------
+  # JOB 1 : TESTS UNITAIRES
+  #
+  # Les tests unitaires du cart-service mockent TOUTES les dépendances :
+  #   - cartsRepo  → mock via vi.mock('../repositories/carts.repo.js')
+  #   - productClient → mock via vi.mock('../clients/product.client.js')
+  #   - cacheService  → mock via vi.mock('../services/cache.service.js')
+  #
+  # Aucune connexion à PostgreSQL ou Redis n'est nécessaire.
+  # Les variables d'environnement sont fournies directement dans vitest.config.js
+  # (section `env`) pour satisfaire la validation fail-fast de environment.js.
+  # ---------------------------------------------------------------------------
+  test:
+    name: Tests unitaires cart-service
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        # Tous les steps s'exécutent dans le répertoire du cart-service
+        working-directory: services/cart
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: services/cart/package-lock.json
+
+      - name: Installation des dépendances
+        run: npm ci
+
+      # NODE_ENV=test est lu par environment.js pour lever une Error
+      # au lieu d'appeler process.exit(1) quand des variables manquent.
+      # Les autres variables sont injectées par vitest.config.js (section env).
+      - name: Exécution des tests unitaires
+        run: npm test -- --run
+        env:
+          NODE_ENV: test
+
+      - name: Upload couverture Codecov
+        uses: codecov/codecov-action@v4
+        if: always()
+        continue-on-error: true
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          flags: cart-service
+          fail_ci_if_error: false
+
+
+  # ---------------------------------------------------------------------------
+  # JOB 2 : BUILD DOCKER
+  #
+  # Vérifie que le Dockerfile du cart-service produit une image valide.
+  # L'image n'est pas publiée ici — Render construit depuis GitHub au déploiement.
+  # Ce job détecte les erreurs de Dockerfile avant qu'elles atteignent Render.
+  # ---------------------------------------------------------------------------
+  build:
+    name: Build Docker cart-service
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (vérification sans push)
+        uses: docker/build-push-action@v5
+        with:
+          context: services/cart
+          file: services/cart/Dockerfile
+          push: false
+          # Cache des layers entre les runs pour réduire la durée de build
+          cache-from: type=gha,scope=cart-service
+          cache-to: type=gha,mode=max,scope=cart-service
