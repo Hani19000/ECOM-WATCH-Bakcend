@@ -4,7 +4,7 @@
  * Annule les commandes PENDING > 24h et libère le stock associé.
  * Fréquence : tous les jours à 3h30.
  */
-import { pgPool } from '../../config/database.js';
+import { pgPool } from '../config/database.js';
 import { logInfo, logError } from '../../utils/logger.js';
 
 export const ordersCleanupJob = {
