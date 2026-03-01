@@ -1,3 +1,4 @@
+import './config/instruments.js';
 import app from './app.js';
 import { ENV } from './config/environment.js';
 import { connectPostgres } from './config/database.js';
