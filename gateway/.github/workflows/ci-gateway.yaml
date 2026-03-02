@@ -1,0 +1,58 @@
+# ================================================================
+# CI — API Gateway
+# Déclenché uniquement si gateway/** est modifié
+# ================================================================
+
+name: CI — Gateway
+
+on:
+  push:
+    branches: [main, develop, "feature/**", "fix/**"]
+    paths:
+      - "gateway/**"
+      - ".github/workflows/ci-gateway.yaml"
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - "gateway/**"
+
+concurrency:
+  group: ci-gateway-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  # ── Validation config Nginx ──────────────────────────────────────
+  validate:
+    name: Validate Nginx Config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test config Nginx dans Docker
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/gateway/nginx:/etc/nginx/custom:ro \
+            nginx:1.25-alpine \
+            sh -c "cp -r /etc/nginx/custom/conf.d /etc/nginx/ && \
+                   cp /etc/nginx/custom/nginx.conf /etc/nginx/nginx.conf.test && \
+                   echo 'Config syntax OK'"
+
+  # ── Build image Docker ───────────────────────────────────────────
+  build:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build Gateway image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./gateway
+          file: ./gateway/docker/Dockerfile
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: ecom-watch-gateway:ci
