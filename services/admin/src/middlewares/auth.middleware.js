@@ -30,3 +30,24 @@ export const protect = (req, _res, next) => {
         next(new AppError('Token invalide ou expiré', 401));
     }
 };
+
+/**
+ * Vérifie que l'utilisateur authentifié possède le rôle ADMIN.
+ * Doit être appelé après `protect` qui hydrate req.user.roles.
+ * Centralisé ici plutôt que dans role.middleware pour éviter un import
+ * supplémentaire dans les routes — toutes les routes admin utilisent
+ * systématiquement protect + requireAdmin ensemble.
+ */
+export const requireAdmin = (req, _res, next) => {
+    const isAdmin = req.user?.roles?.some(
+        (role) => role.toUpperCase() === 'ADMIN'
+    );
+
+    if (!isAdmin) {
+        return next(
+            new AppError("Vous n'avez pas les permissions pour accéder à cette ressource", 403)
+        );
+    }
+
+    next();
+};
