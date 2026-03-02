@@ -4,12 +4,17 @@
 # Déploie le Gateway sur Render via Deploy Hook sur merge main.
 #
 # COHÉRENCE :
-#   Même structure que cd-auth, cd-order et cd-product.
+#   Même structure que cd-auth, cd-order, cd-product, cd-payment, cd-notification.
 #   - Attend la fin du CI avant de déployer
 #   - Vérifie le /health après déploiement
 #   - Résumé GitHub Actions
 #
-# PRÉREQUIS — Secret GitHub :
+# SERVICES ROUTÉS :
+#   auth, order, product, payment, cart → routes publiques exposées
+#   notification                        → aucune route publique (interne uniquement)
+#                                         var NOTIFICATION_SERVICE_HOST requise
+#
+# PRÉREQUIS — Secrets GitHub :
 #   RENDER_GATEWAY_DEPLOY_HOOK → URL du deploy hook Render du Gateway
 #   (Render dashboard → Gateway service → Settings → Deploy Hook)
 # ================================================================
