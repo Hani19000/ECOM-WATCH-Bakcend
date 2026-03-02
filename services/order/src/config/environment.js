@@ -21,6 +21,9 @@ const requiredEnv = [
     'INTERNAL_PRODUCT_SECRET',    // Secret partagé avec le product-service (stock + variants)
     'INTERNAL_ORDER_SECRET',      // Secret partagé avec le monolith (payment webhook)
     'INTERNAL_AUTH_SECRET',       // Secret partagé avec l'auth-service (autoClaimGuestOrders)
+    // Notification-service — emails transactionnels déportés (expédition, livraison, annulation)
+    'NOTIFICATION_SERVICE_URL',
+    'INTERNAL_NOTIFICATION_SECRET',
 ];
 
 // SENTRY_DSN optionnel en développement, obligatoire en production
@@ -93,11 +96,12 @@ export const ENV = Object.freeze({
         tracesSampleRate: Number(process.env.SENTRY_TRACES_SAMPLE_RATE) || 1.0,
     },
 
-    // Communication inter-services
+    // Communication inter-services (appels HTTP sortants)
     services: {
         monolithUrl: process.env.MONOLITH_URL,
         productServiceUrl: process.env.PRODUCT_SERVICE_URL,
-        // Timeout en ms pour les appels HTTP vers le monolith.
+        notificationServiceUrl: process.env.NOTIFICATION_SERVICE_URL,
+        // Timeout en ms pour les appels HTTP vers les services externes.
         // En dessous, on préfère échouer vite et déclencher la saga compensatoire.
         httpTimeoutMs: Number(process.env.INTERNAL_HTTP_TIMEOUT_MS) || 5000,
     },
@@ -110,6 +114,8 @@ export const ENV = Object.freeze({
         authSecret: process.env.INTERNAL_AUTH_SECRET,
         // Utilisé pour les appels vers le product-service (inventory + variants)
         productSecret: process.env.INTERNAL_PRODUCT_SECRET,
+        // Utilisé pour les appels vers le notification-service
+        notificationSecret: process.env.INTERNAL_NOTIFICATION_SECRET,
     },
 
     cors: {

@@ -20,6 +20,9 @@ const requiredEnv = [
     'PAYMENT_SERVICE_URL',       // URL publique de CE service (pour les success_url Stripe)
     'CLIENT_URL',
     'RESEND_API_KEY',
+    // Notification-service — emails transactionnels déportés (confirmation, annulation)
+    'NOTIFICATION_SERVICE_URL',
+    'INTERNAL_NOTIFICATION_SECRET',
 ];
 
 // SENTRY_DSN optionnel en développement, obligatoire en production
@@ -65,18 +68,23 @@ export const ENV = Object.freeze({
         webhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
     },
 
+    // Communication inter-services (appels HTTP sortants)
     services: {
         orderServiceUrl: process.env.ORDER_SERVICE_URL,
         // URL publique du payment-service lui-même, utilisée pour construire
         // les success_url et cancel_url transmises à Stripe lors de la création de session.
         paymentServiceUrl: process.env.PAYMENT_SERVICE_URL,
+        notificationServiceUrl: process.env.NOTIFICATION_SERVICE_URL,
         // Timeout en ms — en dessous on préfère échouer vite plutôt que bloquer Stripe
         httpTimeoutMs: Number(process.env.INTERNAL_HTTP_TIMEOUT_MS) || 5000,
     },
 
-    // Secret partagé avec l'order-service pour les appels /internal/*
+    // Secrets partagés pour les appels inter-services (header X-Internal-Secret)
     internal: {
+        // Secret partagé avec l'order-service pour les appels /internal/*
         orderSecret: process.env.INTERNAL_ORDER_SECRET,
+        // Secret partagé avec le notification-service pour les appels /internal/notifications/*
+        notificationSecret: process.env.INTERNAL_NOTIFICATION_SECRET,
     },
 
     rateLimit: {
