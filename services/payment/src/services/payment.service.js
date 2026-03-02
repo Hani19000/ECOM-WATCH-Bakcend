@@ -14,7 +14,7 @@
  * Hors-scope (délégué à d'autres services) :
  *   - Lecture et mise à jour des commandes → orderClient (HTTP)
  *   - Récupération des données utilisateur → payload JWT (pas de DB auth)
- *   - Envoi d'emails → notificationService
+ *   - Envoi d'emails → notificationClient (HTTP, fire-and-forget)
  *
  * Pourquoi pas d'appel vers usersRepo :
  *   Le payment-service est stateless vis-à-vis des utilisateurs.
@@ -24,9 +24,9 @@
 import Stripe from 'stripe';
 import { ENV } from '../config/environment.js';
 import { orderClient } from '../clients/order.client.js';
+import { notificationClient } from '../clients/notification.client.js';
 import { paymentsRepo } from '../repositories/index.repo.js';
 import { cacheService } from './cache.service.js';
-import { notificationService } from './notifications/notification.service.js';
 import { AppError, ValidationError } from '../utils/appError.js';
 import { HTTP_STATUS } from '../constants/httpStatus.js';
 import { ORDER_STATUS, PAYMENT_STATUS } from '../constants/enums.js';
@@ -333,25 +333,68 @@ class PaymentService {
     }
 
     // =========================================================================
-    // NOTIFICATIONS PRIVÉES
+    // NOTIFICATIONS PRIVÉES — Délégation vers le notification-service
     // =========================================================================
 
     /**
-     * Déclenche les notifications post-paiement de manière asynchrone.
-     * La résolution de l'email est déléguée au notificationService
-     * pour ne pas dupliquer la logique de fallback email.
+     * Résout l'email du destinataire à partir des données disponibles.
+     * Priorité à l'email Stripe (plus fiable car validé lors du paiement),
+     * puis fallback sur l'adresse de livraison.
+     *
+     * @private
+     * @param {object} stripeSession - Session Stripe (checkout.session.completed/expired)
+     * @param {object} order         - Données de la commande
+     * @returns {string|null}
      */
-    async _dispatchPostPaymentNotifications(session, orderId) {
-        const order = await orderClient.findById(orderId);
-        await notificationService.notifyPaymentConfirmed(session, order);
+    _resolveNotificationEmail(stripeSession, order) {
+        return (
+            stripeSession?.customer_details?.email ||
+            stripeSession?.customer_email ||
+            order?.shippingAddress?.email ||
+            null
+        );
     }
 
     /**
-     * Envoie la notification d'expiration de session.
+     * Déclenche la confirmation de commande après paiement validé.
+     * Fire-and-forget : ne bloque pas le traitement du webhook Stripe.
+     */
+    async _dispatchPostPaymentNotifications(session, orderId) {
+        const order = await orderClient.findById(orderId);
+
+        const email = this._resolveNotificationEmail(session, order);
+
+        if (!email) {
+            logError(
+                new Error('Email introuvable pour la notification de confirmation de paiement'),
+                { context: 'PaymentService._dispatchPostPaymentNotifications', orderId }
+            );
+            return;
+        }
+
+        notificationClient.notifyOrderConfirmation(email, order);
+
+        logInfo(`Notification paiement confirmé envoyée — orderId: ${orderId}`);
+    }
+
+    /**
+     * Déclenche la notification d'expiration de session.
+     * Fire-and-forget : ne bloque pas le traitement du webhook Stripe.
      */
     async _dispatchSessionExpiredNotification(session, orderId) {
         const order = await orderClient.findById(orderId);
-        await notificationService.notifySessionExpired(session, order);
+
+        const email = this._resolveNotificationEmail(session, order);
+
+        if (!email) {
+            // L'absence d'email sur une session expirée n'est pas critique — on log et on continue.
+            logInfo(`Session expirée sans email résolvable — orderId: ${orderId}`);
+            return;
+        }
+
+        notificationClient.notifyOrderCancelled(email, order, 'checkout.session.expired');
+
+        logInfo(`Notification session expirée envoyée — orderId: ${orderId}`);
     }
 
     // =========================================================================
